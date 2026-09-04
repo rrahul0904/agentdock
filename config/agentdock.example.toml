@@ -1,0 +1,17 @@
+[daemon]
+bind = "127.0.0.1"
+port = 7317
+scan_interval_ms = 2000
+
+[discovery]
+include_loopback = true
+include_containers = true
+
+[proxy]
+enabled = false
+http_port = 7777
+domain_suffix = "localhost"
+
+[security]
+public_sharing_enabled = false
+allow_process_termination = false

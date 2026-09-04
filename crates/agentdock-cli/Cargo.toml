@@ -1,0 +1,16 @@
+[package]
+name = "agentdock-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agentdock"
+path = "src/main.rs"
+
+[dependencies]
+agentdock-core = { path = "../agentdock-core" }
+process-discovery = { path = "../process-discovery" }
+project-resolver = { path = "../project-resolver" }
+port-manager = { path = "../port-manager" }
+serde_json.workspace = true
