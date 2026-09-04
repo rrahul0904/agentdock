@@ -75,8 +75,8 @@ mod tests {
 
     #[test]
     fn fallback_uses_start_directory() {
-        let root = Path::new("example-agentdock-project");
-        let project = resolve_project(root);
+        let root = std::env::temp_dir().join("example-agentdock-project");
+        let project = resolve_project(&root);
         assert_eq!(project.name, "example-agentdock-project");
     }
 }
