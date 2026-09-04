@@ -12,7 +12,7 @@
 
 ## Logical architecture
 
-```
+```text
 +----------------------+       +----------------------+
 | Desktop / CLI / MCP  |       | Coding agents        |
 +----------+-----------+       +----------+-----------+
@@ -49,6 +49,32 @@ Optional adapters:
 - Git providers
 ```
 
+## Phase 1 discovery pipeline
+
+```text
+OS listener inventory
+   |
+   +-- macOS/Linux: lsof
+   |
+   +-- Windows: Get-NetTCPConnection / Get-NetUDPEndpoint
+   |
+PID + bind address + port
+   |
+process enrichment
+   |
+command + command line + cwd
+   |
+project resolver
+   |
+framework/container classifier
+   |
+normalized Service model
+   |
+CLI / future daemon reconciliation
+```
+
+Discovery is observational. It never kills or exposes processes.
+
 ## Core domain model
 
 ### Project
@@ -75,19 +101,6 @@ A local, LAN, or public route to a service.
 ### VerificationRun
 A browser/test-based validation result tied to a service and revision.
 
-## Phase 1 execution model
-
-The seed uses direct CLI invocation:
-
-```
-agentdock scan
-  -> NativeDiscovery
-  -> lsof / PowerShell
-  -> normalized Service[]
-  -> ProjectResolver
-  -> terminal/JSON output
-```
-
 ## Phase 2 daemon
 
 Introduce a long-running Rust daemon:
@@ -103,7 +116,7 @@ Introduce a long-running Rust daemon:
 
 Later, a reverse proxy listens on a configurable local port and routes by Host header:
 
-```
+```text
 storefront.localhost -> service_id=abc -> 127.0.0.1:3001
 api.localhost        -> service_id=def -> 127.0.0.1:8012
 ```

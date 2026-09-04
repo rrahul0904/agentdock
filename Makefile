@@ -1,4 +1,4 @@
-.PHONY: check test scan fmt
+.PHONY: check test scan scan-all fmt
 
 check:
 	cargo check --workspace
@@ -8,6 +8,9 @@ test:
 
 scan:
 	cargo run -p agentdock-cli -- scan
+
+scan-all:
+	cargo run -p agentdock-cli -- scan --all
 
 fmt:
 	cargo fmt --all

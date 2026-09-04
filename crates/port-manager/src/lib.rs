@@ -58,9 +58,15 @@ impl PortManager {
         self.reservations.remove(&port).is_some()
     }
 
+    pub fn is_reserved(&mut self, port: u16) -> bool {
+        self.reap();
+        self.reservations.contains_key(&port)
+    }
+
     pub fn reap(&mut self) {
         let now = Instant::now();
-        self.reservations.retain(|_, reservation| reservation.expires_at > now);
+        self.reservations
+            .retain(|_, reservation| reservation.expires_at > now);
     }
 }
 
@@ -76,7 +82,9 @@ mod tests {
     fn reservation_can_be_released() {
         let mut manager = PortManager::new(45000, 45100, Duration::from_secs(60));
         if let Some(port) = manager.reserve("test") {
+            assert!(manager.is_reserved(port));
             assert!(manager.release(port));
+            assert!(!manager.is_reserved(port));
         }
     }
 }

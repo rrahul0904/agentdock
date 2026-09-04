@@ -5,6 +5,8 @@ scan_interval_ms = 2000
 
 [discovery]
 include_loopback = true
+include_system = false
+include_unknown = false
 include_containers = true
 
 [proxy]

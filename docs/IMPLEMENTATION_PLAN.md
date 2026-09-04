@@ -1,6 +1,6 @@
 # Implementation Plan
 
-## Phase 0 — Foundation (current)
+## Phase 0 — Foundation
 
 Deliverables:
 
@@ -17,28 +17,34 @@ Deliverables:
 - [x] security model
 - [x] roadmap
 
-Exit criterion: repository builds and tests in CI.
+## Phase 1 — Reliable local discovery (current)
 
-## Phase 1 — Reliable local discovery
+Implemented:
 
-Implement:
+- [x] macOS/Linux listener parsing via `lsof`
+- [x] Windows listener/PID discovery via PowerShell
+- [x] command-line enrichment on Unix
+- [x] cwd capture on Unix
+- [x] bind-address capture
+- [x] project marker fallback resolution
+- [x] Git worktree marker recognition
+- [x] framework/runtime detection
+- [x] Docker/Podman proxy recognition
+- [x] development/infrastructure/system/unknown classification
+- [x] default system-noise hiding with `--all`
+- [x] optional UDP discovery
+- [x] fixture-driven parser tests
+- [x] cross-platform Rust CI matrix
 
-- robust macOS process discovery
-- robust Linux discovery
-- Windows process/PID correlation
-- executable + argv capture
-- cwd capture
-- framework detection
-- Docker/Podman awareness
-- deduplication and reconciliation
-- ignored-system-service filters
-- fixture-driven parsers
+Remaining hardening before calling discovery production-grade:
 
-Acceptance:
+- [ ] Windows cwd enrichment
+- [ ] real Docker/Podman container ID/name correlation
+- [ ] richer framework fingerprints from manifests
+- [ ] benchmark discovery on large process inventories
+- [ ] integration fixtures captured from supported OS versions
 
-- identify common Next.js, Vite, FastAPI, Rails, Go, Java, Docker and database listeners
-- map PID -> cwd with >95% reliability on supported local fixtures
-- no destructive actions
+Exit criterion: reliable normalized discovery model suitable for periodic daemon reconciliation.
 
 ## Phase 2 — Durable daemon and registry
 

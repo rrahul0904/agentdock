@@ -12,5 +12,6 @@ path = "src/main.rs"
 agentdock-core = { path = "../agentdock-core" }
 process-discovery = { path = "../process-discovery" }
 project-resolver = { path = "../project-resolver" }
+framework-detection = { path = "../framework-detection" }
 port-manager = { path = "../port-manager" }
 serde_json.workspace = true

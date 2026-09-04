@@ -4,7 +4,7 @@
 
 The core idea is simple: local development should be addressed by **project identity**, not by ephemeral port numbers.
 
-```
+```text
 Codex / Claude Code / Cursor / Terminal
                  |
                  v
@@ -28,6 +28,8 @@ AgentDock provides the local runtime control plane for that environment:
 
 - discover listening development services
 - resolve services back to repositories/projects
+- classify frameworks and infrastructure
+- distinguish development listeners from obvious OS noise
 - assign stable project identities
 - reserve ports safely for parallel agents
 - attribute processes to agents and worktrees
@@ -39,27 +41,31 @@ AgentDock provides the local runtime control plane for that environment:
 
 ## Current status
 
-**Phase 0 / initial implementation draft.**
+**Phase 1 — reliable local discovery.**
 
-Implemented in this seed:
+Implemented:
 
-- Rust workspace
-- local service scanner using OS-native commands
-- normalized service/process model
-- project resolver
-- in-memory port reservation manager
+- cross-platform Rust workspace
+- macOS/Linux `lsof` discovery with PID, bind address, command, cwd, and command line enrichment
+- Windows PowerShell listener/PID discovery
+- project/repository resolution
+- framework/runtime classification
+- system-service classification with `--all` override
+- Docker/Podman proxy recognition
+- fixture-driven parser tests
+- in-memory race-aware port reservation manager
 - CLI scanner
-- MCP tool contract draft
-- architecture, security, roadmap, and implementation docs
-- GitHub Actions CI
+- MCP bootstrap contract
+- GitHub Actions cross-platform Rust CI
 
 ## Repository layout
 
-```
+```text
 crates/
   agentdock-core/
   process-discovery/
   project-resolver/
+  framework-detection/
   port-manager/
   agentdock-cli/
 
@@ -71,9 +77,12 @@ docs/
   PRODUCT_REVERSE_ENGINEERING.md
   ARCHITECTURE.md
   IMPLEMENTATION_PLAN.md
+  PHASE_1_DISCOVERY.md
   SECURITY_MODEL.md
   MCP_DESIGN.md
   ROADMAP.md
+  TESTING.md
+  ADR/
 ```
 
 ## Run the Rust CLI
@@ -84,10 +93,22 @@ Prerequisites: Rust 1.80+.
 cargo run -p agentdock-cli -- scan
 ```
 
+Include system/unknown listeners:
+
+```bash
+cargo run -p agentdock-cli -- scan --all
+```
+
 JSON output:
 
 ```bash
-cargo run -p agentdock-cli -- scan --json
+cargo run -p agentdock-cli -- scan --json --all
+```
+
+Environment diagnostics:
+
+```bash
+cargo run -p agentdock-cli -- doctor
 ```
 
 ## Development principles

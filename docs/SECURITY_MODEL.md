@@ -17,6 +17,20 @@ Discovery does not imply exposure. A discovered service remains bound exactly as
 
 Each boundary must require an explicit capability.
 
+## Discovery privacy
+
+The discovery layer intentionally captures only operational metadata required to map listeners to projects:
+
+- process name
+- command line
+- cwd
+- bind address
+- port
+
+It does **not** capture process environments, source files, request bodies, or application secrets.
+
+Command lines can themselves contain secrets. Future persistence/logging must therefore apply redaction before durable storage.
+
 ## Destructive operations
 
 Process termination, orphan cleanup, port release, and worktree cleanup must enforce:

@@ -1,0 +1,6 @@
+p100
+cpostgres
+n127.0.0.1:5432
+p101
+credis-server
+n*:6379

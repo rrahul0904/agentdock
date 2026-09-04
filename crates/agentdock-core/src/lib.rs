@@ -6,10 +6,15 @@ pub struct Service {
     pub pid: Option<u32>,
     pub port: u16,
     pub protocol: Protocol,
+    pub bind_address: Option<String>,
     pub command: Option<String>,
+    pub command_line: Option<String>,
     pub working_directory: Option<PathBuf>,
     pub project: Option<ProjectIdentity>,
+    pub framework: Framework,
+    pub container: Option<ContainerIdentity>,
     pub agent: Option<AgentIdentity>,
+    pub classification: ServiceClassification,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,6 +29,7 @@ pub struct ProjectIdentity {
     pub name: String,
     pub root: PathBuf,
     pub git_root: Option<PathBuf>,
+    pub git_worktree: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,11 +49,62 @@ pub enum AgentKind {
     Unknown,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Framework {
+    NextJs,
+    Vite,
+    FastApi,
+    Uvicorn,
+    Django,
+    Rails,
+    Go,
+    SpringBoot,
+    Node,
+    Python,
+    Postgres,
+    Redis,
+    Mailhog,
+    DockerProxy,
+    PodmanProxy,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceClassification {
+    Development,
+    Infrastructure,
+    System,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContainerIdentity {
+    pub runtime: ContainerRuntime,
+    pub id: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ContainerRuntime {
+    Docker,
+    Podman,
+}
+
 impl Service {
     pub fn stable_hostname(&self) -> Option<String> {
         self.project
             .as_ref()
             .map(|project| format!("{}.localhost", slugify(&project.name)))
+    }
+
+    pub fn is_default_visible(&self) -> bool {
+        !matches!(
+            self.classification,
+            ServiceClassification::System | ServiceClassification::Unknown
+        )
     }
 }
 
@@ -75,5 +132,25 @@ mod tests {
     #[test]
     fn slug_is_stable() {
         assert_eq!(slugify("My Cool_App"), "my-cool-app");
+    }
+
+    #[test]
+    fn system_services_are_hidden_by_default() {
+        let service = Service {
+            pid: Some(1),
+            port: 5000,
+            protocol: Protocol::Tcp,
+            bind_address: Some("127.0.0.1".into()),
+            command: Some("ControlCenter".into()),
+            command_line: None,
+            working_directory: None,
+            project: None,
+            framework: Framework::Unknown,
+            container: None,
+            agent: None,
+            classification: ServiceClassification::System,
+        };
+
+        assert!(!service.is_default_visible());
     }
 }

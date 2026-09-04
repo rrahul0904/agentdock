@@ -58,7 +58,7 @@ Terminate only processes classified as orphaned and allowed by policy.
 
 ## Protocol architecture
 
-```
+```text
 AI client
    |
 stdio MCP

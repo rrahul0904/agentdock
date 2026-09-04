@@ -29,7 +29,7 @@ The product moat should not be a tunnel implementation. Tunnels are commodity in
 
 The durable differentiation should be the local graph:
 
-```
+```text
 AgentSession
   -> Task
   -> Repository
