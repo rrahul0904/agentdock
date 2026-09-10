@@ -1,0 +1,2 @@
+41234	127.0.0.1	3000	node.exe	node.exe node_modules\\next\\dist\\bin\\next dev
+41235	0.0.0.0	8000	python.exe	python.exe -m uvicorn app.main:app
