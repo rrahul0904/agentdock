@@ -2,49 +2,45 @@
 
 ## Completed baseline
 
-Phase 0:
+### Phase 0
 - repository architecture
 - CLI/MCP scaffolding
 - product and security docs
 
-Phase 1:
+### Phase 1
 - cross-platform listener discovery
 - project/framework enrichment
 - service classification
 - parser fixtures
 
-Phase 2:
+### Phase 2
 - agentdockd
 - SQLite persistence
 - periodic reconciliation
-- stable project/service identities
-- active/stale/orphaned lifecycle
+- stable identities
+- lifecycle state
 - event cursor
-- local HTTP API
-- CLI daemon client
+- local control API
 
-## Next - Phase 3
+### Phase 3
+- canonical .localhost routes
+- route collision handling
+- local reverse proxy
+- port-change transparent routing
+- route API and CLI inspection
 
-Stable localhost routing:
+## Next - Phase 4
 
-- reverse proxy
-- hostname registry
-- aliases
-- collision handling
-- health-aware routes
-- fallback port
-- proxy tests
-
-## Then - Phase 4
-
-Agent runtime:
+Agent-aware runtime:
 
 - Codex attribution
 - Claude Code attribution
 - Cursor attribution
 - Gemini attribution
-- MCP tools backed by daemon
-- ownership and safe cleanup
+- daemon-backed MCP tools
+- session ownership
+- safe port reservation/release
+- bounded orphan cleanup
 
 ## Later
 
