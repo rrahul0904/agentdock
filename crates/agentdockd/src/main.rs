@@ -440,7 +440,18 @@ fn reserve_port(
     request: &http::HttpRequest,
     state: &DaemonState,
 ) -> Result<ApiResponse, String> {
-    let body = parse_json_body(request)?;
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({
+                    "error": "invalid_json",
+                    "message": error
+                }),
+            ));
+        }
+    };
 
     let Some(owner) = body
         .get("owner")
@@ -484,7 +495,18 @@ fn release_port(
     request: &http::HttpRequest,
     state: &DaemonState,
 ) -> Result<ApiResponse, String> {
-    let body = parse_json_body(request)?;
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({
+                    "error": "invalid_json",
+                    "message": error
+                }),
+            ));
+        }
+    };
 
     let Some(owner) = body
         .get("owner")
