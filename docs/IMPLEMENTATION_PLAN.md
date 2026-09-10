@@ -8,22 +8,17 @@ Completed: product thesis, repository architecture, Rust workspace, service mode
 
 Implemented:
 
-- macOS/Linux listener discovery with lsof
-- Windows listener/PID discovery with PowerShell
-- command-line enrichment on Unix
-- cwd capture on Unix
-- bind-address capture
-- project marker fallback
-- Git worktree marker recognition
-- framework/runtime detection
-- Docker/Podman hints
+- macOS/Linux listener discovery
+- Windows listener/PID discovery
+- command-line enrichment
+- working-directory capture on Unix
+- project/worktree resolution
+- framework/runtime classification
 - service classification
 - optional UDP discovery
 - fixture-driven parser tests
-- Windows parser fixture
-- cross-platform CI matrix
 
-Incremental hardening still available:
+Incremental hardening remains:
 
 - Windows cwd enrichment
 - real container ID/name correlation
@@ -35,46 +30,50 @@ Incremental hardening still available:
 Implemented:
 
 - agentdockd
-- SQLite schema/migration baseline
+- SQLite schema and migrations
 - bundled SQLite
-- periodic service reconciliation
+- periodic reconciliation
 - durable project IDs
 - durable service IDs
-- stable identity across project port changes
 - active/stale/orphaned lifecycle
 - resume detection
-- append-only lifecycle event log
+- append-only event log
 - cursor-based event polling
-- read-only local HTTP API
+- read-only loopback HTTP API
 - CLI daemon client
-- restart-safe persistence model
-- in-memory reconciliation tests
+- restart-safe persistence
+
+## Phase 3 - Stable localhost routing
+
+Implemented:
+
+- local HTTP reverse proxy
+- canonical project .localhost route registry
+- deterministic hostname collision handling
+- route persistence in SQLite
+- hostname -> active development service resolution
+- port-change transparency
+- 404 for unknown routes
+- 503 when a project has no active HTTP service
+- loopback-only proxy binding by default
+- configurable fallback proxy port
+- route inspection via API and CLI
+- proxy parser/unit tests
+- registry route collision/port-change tests
 
 Known refinements:
 
 - explicit service roles for monorepos with multiple same-framework listeners
-- authenticated non-loopback API mode
-- install/start-at-login service packaging
-
-## Phase 3 - Stable localhost routing
-
-Next:
-
-- reverse proxy
-- hostname registry
-- collision handling
-- aliases
-- health-aware routing
-- fallback port mode
-- proxy tests
-
-Acceptance:
-
-- project.localhost follows a project across port changes
-- proxy never exposes a service externally by default
+- request/response health probes beyond listener presence
+- user-facing alias management API
+- privileged/service-installed port 80 mode
+- optional local TLS
 
 ## Phase 4 - Agent attribution and MCP
 
+Next:
+
+- move MCP tools onto daemon API
 - list_services
 - get_project
 - reserve_port
@@ -82,8 +81,11 @@ Acceptance:
 - get_logs
 - get_preview_url
 - cleanup_orphans
-- Codex / Claude Code / Cursor / Gemini attribution
-- caller ownership policy
+- Codex attribution
+- Claude Code attribution
+- Cursor attribution
+- Gemini attribution
+- caller/session ownership policy
 
 ## Later phases
 
