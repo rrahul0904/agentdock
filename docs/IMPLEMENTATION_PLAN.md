@@ -2,7 +2,7 @@
 
 ## Phase 0 - Foundation
 
-Completed: product thesis, repository architecture, Rust workspace, service model, project resolver, port reservation, CLI, MCP bootstrap, CI, security model, and roadmap.
+Completed: product thesis, repository architecture, Rust workspace, core service model, CLI, MCP bootstrap, CI, security model, and roadmap.
 
 ## Phase 1 - Reliable local discovery
 
@@ -11,86 +11,106 @@ Implemented:
 - macOS/Linux listener discovery
 - Windows listener/PID discovery
 - command-line enrichment
-- working-directory capture on Unix
+- Unix cwd capture
 - project/worktree resolution
 - framework/runtime classification
-- service classification
 - optional UDP discovery
 - fixture-driven parser tests
 
-Incremental hardening remains:
+Incremental discovery hardening:
 
 - Windows cwd enrichment
 - real container ID/name correlation
 - manifest-aware framework fingerprints
-- large inventory benchmarks
+- large-inventory benchmarks
 
 ## Phase 2 - Durable daemon and registry
 
 Implemented:
 
 - agentdockd
-- SQLite schema and migrations
 - bundled SQLite
+- durable project/service IDs
 - periodic reconciliation
-- durable project IDs
-- durable service IDs
 - active/stale/orphaned lifecycle
 - resume detection
-- append-only event log
-- cursor-based event polling
-- read-only loopback HTTP API
+- event cursor
+- loopback control API
 - CLI daemon client
-- restart-safe persistence
 
 ## Phase 3 - Stable localhost routing
 
 Implemented:
 
-- local HTTP reverse proxy
-- canonical project .localhost route registry
-- deterministic hostname collision handling
-- route persistence in SQLite
-- hostname -> active development service resolution
-- port-change transparency
-- 404 for unknown routes
-- 503 when a project has no active HTTP service
-- loopback-only proxy binding by default
-- configurable fallback proxy port
-- route inspection via API and CLI
-- proxy parser/unit tests
-- registry route collision/port-change tests
+- HTTP reverse proxy
+- canonical project .localhost routes
+- deterministic collision handling
+- persistent route registry
+- active-development-service selection
+- transparent port changes
+- route API/CLI inspection
+- loopback-only default binding
 
-Known refinements:
+Refinements:
 
-- explicit service roles for monorepos with multiple same-framework listeners
-- request/response health probes beyond listener presence
-- user-facing alias management API
-- privileged/service-installed port 80 mode
+- explicit service roles in monorepos
+- active HTTP health probes
+- alias write API
+- installer-managed port 80
 - optional local TLS
 
 ## Phase 4 - Agent attribution and MCP
 
+Implemented:
+
+- process-ancestry attribution for Codex
+- process-ancestry attribution for Claude Code
+- process-ancestry attribution for Cursor
+- process-ancestry attribution for Gemini CLI
+- attribution in daemon reconciliation
+- attribution in one-shot CLI discovery
+- bounded HTTP request parsing for daemon writes
+- owner-scoped port reservations
+- owner-scoped release protection
+- MCP SDK v2 migration
+- daemon-backed agentdock_status
+- daemon-backed list_services
+- daemon-backed get_project
+- daemon-backed list_routes
+- daemon-backed reserve_port
+- daemon-backed release_port
+- daemon-backed get_preview_url
+- orphan inventory via cleanup_orphans dry-run
+- MCP TypeScript CI build
+
+Intentionally not implemented yet:
+
+- destructive orphan cleanup
+- arbitrary shell/process execution
+- log retrieval
+- persistent agent-session ownership
+- Git worktree lifecycle ownership
+
+Those require stronger ownership evidence first.
+
+## Phase 5 - Durable agent/worktree lifecycle
+
 Next:
 
-- move MCP tools onto daemon API
-- list_services
-- get_project
-- reserve_port
-- release_port
-- get_logs
-- get_preview_url
-- cleanup_orphans
-- Codex attribution
-- Claude Code attribution
-- Cursor attribution
-- Gemini attribution
-- caller/session ownership policy
+- AgentSession registry
+- process ownership graph
+- Git worktree discovery
+- branch/revision tracking
+- process start/end attribution
+- bounded log capture
+- health checks
+- persistent port reservation ownership
+- safe cleanup eligibility rules
 
-## Later phases
+## Later
 
-- worktree topology and lifecycle
 - browser verification
-- LAN/public preview adapters
+- LAN/mDNS
+- secure public previews
 - Tauri desktop UX
-- team policy / RBAC / enterprise self-hosting
+- team policies, audit, RBAC/SSO
