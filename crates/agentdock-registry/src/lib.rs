@@ -347,7 +347,7 @@ fn upsert_project(tx: &Transaction<'_>, project: &ProjectIdentity, observed_at_m
             project_id,
             canonical_key,
             project.name,
-            project.root.to_string_lossy(),
+            project.root.to_string_lossy().to_string(),
             project.git_root.as_ref().map(|p| p.to_string_lossy().to_string()),
             if project.git_worktree { 1 } else { 0 },
             observed_at_ms
