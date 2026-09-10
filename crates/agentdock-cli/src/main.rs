@@ -1,3 +1,4 @@
+use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -32,6 +33,7 @@ fn scan(args: &[String]) {
                     service.project = Some(resolve_project(cwd));
                 }
                 enrich_service(service);
+                enrich_agent(service);
             }
 
             if !include_all {
