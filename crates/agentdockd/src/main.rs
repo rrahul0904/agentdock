@@ -1,12 +1,15 @@
+mod http;
+
+use agent_attribution::enrich_agent;
 use agentdock_core::Service;
 use agentdock_proxy::{ProxyTarget, TargetResolver};
 use agentdock_registry::{now_ms, Registry, ServiceRecord};
 use framework_detection::enrich_service;
+use port_manager::PortManager;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
 use project_resolver::resolve_project;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fs;
-use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -25,14 +28,42 @@ fn main() {
     }
 }
 
+#[derive(Clone)]
+struct ProxyRuntime {
+    enabled: bool,
+    bind: SocketAddr,
+}
+
+struct DaemonState {
+    registry: Arc<Mutex<Registry>>,
+    ports: Arc<Mutex<PortManager>>,
+    proxy: ProxyRuntime,
+}
+
+struct ApiResponse {
+    status: u16,
+    body: Value,
+}
+
+impl ApiResponse {
+    fn new(status: u16, body: Value) -> Self {
+        Self { status, body }
+    }
+
+    fn ok(body: Value) -> Self {
+        Self::new(200, body)
+    }
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let bind = value_after(&args, "--bind").unwrap_or_else(|| DEFAULT_BIND.to_string());
+    let bind = value_after(&args, "--bind")
+        .unwrap_or_else(|| DEFAULT_BIND.to_string());
     let bind_addr = parse_bind(&bind, &args)?;
 
-    let proxy_bind =
-        value_after(&args, "--proxy-bind").unwrap_or_else(|| DEFAULT_PROXY_BIND.to_string());
+    let proxy_bind = value_after(&args, "--proxy-bind")
+        .unwrap_or_else(|| DEFAULT_PROXY_BIND.to_string());
     let proxy_bind_addr = parse_bind(&proxy_bind, &args)?;
 
     let interval_ms = value_after(&args, "--interval-ms")
@@ -59,9 +90,12 @@ fn run() -> Result<(), String> {
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
 
-    let mut registry = Registry::open(&db_path).map_err(|error| error.to_string())?;
+    let mut registry = Registry::open(&db_path)
+        .map_err(|error| error.to_string())?;
     registry.set_orphan_after_ms(orphan_after_ms);
+
     let registry = Arc::new(Mutex::new(registry));
+    let ports = Arc::new(Mutex::new(PortManager::default()));
 
     reconcile_once(&registry, include_udp)?;
 
@@ -87,6 +121,15 @@ fn run() -> Result<(), String> {
         });
     }
 
+    let state = DaemonState {
+        registry,
+        ports,
+        proxy: ProxyRuntime {
+            enabled: proxy_enabled,
+            bind: proxy_bind_addr,
+        },
+    };
+
     let listener = TcpListener::bind(bind_addr)
         .map_err(|error| format!("failed to bind local API at {bind}: {error}"))?;
 
@@ -105,7 +148,7 @@ fn run() -> Result<(), String> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(error) = handle_client(stream, &registry) {
+                if let Err(error) = handle_client(stream, &state) {
                     eprintln!("agentdockd API error: {error}");
                 }
             }
@@ -143,10 +186,17 @@ impl TargetResolver for RegistryResolver {
 }
 
 fn service_socket(record: &ServiceRecord) -> Result<SocketAddr, String> {
-    let address = record.service.bind_address.as_deref().unwrap_or("127.0.0.1");
+    let address = record
+        .service
+        .bind_address
+        .as_deref()
+        .unwrap_or("127.0.0.1");
 
     let ip = match address {
-        "*" | "0.0.0.0" | "::" | "localhost" => IpAddr::from([127, 0, 0, 1]),
+        "*" | "0.0.0.0" | "localhost" => IpAddr::from([127, 0, 0, 1]),
+        "::" => "::1"
+            .parse::<IpAddr>()
+            .map_err(|error| error.to_string())?,
         value => value
             .parse::<IpAddr>()
             .map_err(|error| format!("unsupported service bind address {value}: {error}"))?,
@@ -185,13 +235,17 @@ fn reconcile_once(
 
 fn discover_services(include_udp: bool) -> Result<Vec<Service>, String> {
     let discovery = NativeDiscovery::new(DiscoveryOptions { include_udp });
-    let mut services = discovery.scan().map_err(|error| error.to_string())?;
+    let mut services = discovery
+        .scan()
+        .map_err(|error| error.to_string())?;
 
     for service in &mut services {
         if let Some(cwd) = service.working_directory.as_deref() {
             service.project = Some(resolve_project(cwd));
         }
+
         enrich_service(service);
+        enrich_agent(service);
     }
 
     Ok(services)
@@ -199,92 +253,91 @@ fn discover_services(include_udp: bool) -> Result<Vec<Service>, String> {
 
 fn handle_client(
     mut stream: TcpStream,
-    registry: &Arc<Mutex<Registry>>,
+    state: &DaemonState,
 ) -> Result<(), String> {
     stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| error.to_string())?;
 
-    let mut buffer = [0_u8; 16 * 1024];
-    let read = stream
-        .read(&mut buffer)
+    let request = http::read_request(&mut stream)
         .map_err(|error| error.to_string())?;
 
-    if read == 0 {
-        return Ok(());
-    }
+    let response = route_api(&request, state)?;
 
-    let request = String::from_utf8_lossy(&buffer[..read]);
-    let request_line = request.lines().next().unwrap_or_default();
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let target = parts.next().unwrap_or("/");
+    http::write_json(
+        &mut stream,
+        response.status,
+        response.body,
+    )
+    .map_err(|error| error.to_string())
+}
 
-    if method != "GET" {
-        return write_json(
-            &mut stream,
-            405,
-            json!({"error": "method_not_allowed"}),
-        );
-    }
+fn route_api(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let (path, query) = split_target(&request.target);
 
-    let (path, query) = split_target(target);
-
-    let result = match path {
-        "/healthz" => Ok(json!({
+    match (request.method.as_str(), path) {
+        ("GET", "/healthz") => Ok(ApiResponse::ok(json!({
             "status": "ok",
             "version": env!("CARGO_PKG_VERSION")
-        })),
-        "/v1/status" => {
-            let registry = registry
-                .lock()
-                .map_err(|_| "registry mutex poisoned".to_string())?;
+        }))),
 
-            registry
+        ("GET", "/v1/status") => {
+            let registry = lock_registry(state)?;
+            let status = registry
                 .status()
-                .map(|status| {
-                    json!({
-                        "daemon": {
-                            "version": env!("CARGO_PKG_VERSION"),
-                            "status": "running"
-                        },
-                        "registry": status
-                    })
-                })
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "daemon": {
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "status": "running"
+                },
+                "proxy": {
+                    "enabled": state.proxy.enabled,
+                    "bind": state.proxy.bind.to_string()
+                },
+                "registry": status
+            })))
         }
-        "/v1/services" => {
+
+        ("GET", "/v1/services") => {
             let include_hidden = query_flag(query, "all");
-            let registry = registry
-                .lock()
-                .map_err(|_| "registry mutex poisoned".to_string())?;
-
-            registry
+            let registry = lock_registry(state)?;
+            let services = registry
                 .list_services(include_hidden)
-                .map(|services| json!({"services": services}))
-                .map_err(|error| error.to_string())
-        }
-        "/v1/projects" => {
-            let registry = registry
-                .lock()
-                .map_err(|_| "registry mutex poisoned".to_string())?;
+                .map_err(|error| error.to_string())?;
 
-            registry
+            Ok(ApiResponse::ok(json!({
+                "services": services
+            })))
+        }
+
+        ("GET", "/v1/projects") => {
+            let registry = lock_registry(state)?;
+            let projects = registry
                 .list_projects()
-                .map(|projects| json!({"projects": projects}))
-                .map_err(|error| error.to_string())
-        }
-        "/v1/routes" => {
-            let registry = registry
-                .lock()
-                .map_err(|_| "registry mutex poisoned".to_string())?;
+                .map_err(|error| error.to_string())?;
 
-            registry
-                .list_routes()
-                .map(|routes| json!({"routes": routes}))
-                .map_err(|error| error.to_string())
+            Ok(ApiResponse::ok(json!({
+                "projects": projects
+            })))
         }
-        "/v1/events" => {
+
+        ("GET", "/v1/routes") => {
+            let registry = lock_registry(state)?;
+            let routes = registry
+                .list_routes()
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "routes": routes
+            })))
+        }
+
+        ("GET", "/v1/events") => {
             let after = query_value(query, "after")
                 .and_then(|value| value.parse::<i64>().ok())
                 .unwrap_or(0);
@@ -293,36 +346,208 @@ fn handle_client(
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(200);
 
-            let registry = registry
-                .lock()
-                .map_err(|_| "registry mutex poisoned".to_string())?;
-
-            registry
+            let registry = lock_registry(state)?;
+            let events = registry
                 .list_events(after, limit)
-                .map(|events| json!({"events": events}))
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "events": events
+            })))
         }
-        _ => {
-            write_json(
-                &mut stream,
-                404,
-                json!({"error": "not_found"}),
-            )?;
-            return Ok(());
-        }
+
+        ("GET", "/v1/preview") => preview_response(query, state),
+
+        ("POST", "/v1/ports/reserve") => reserve_port(request, state),
+
+        ("POST", "/v1/ports/release") => release_port(request, state),
+
+        ("GET" | "POST", _) => Ok(ApiResponse::new(
+            404,
+            json!({"error": "not_found"}),
+        )),
+
+        _ => Ok(ApiResponse::new(
+            405,
+            json!({"error": "method_not_allowed"}),
+        )),
+    }
+}
+
+fn preview_response(
+    query: &str,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    if !state.proxy.enabled {
+        return Ok(ApiResponse::new(
+            503,
+            json!({
+                "error": "proxy_disabled"
+            }),
+        ));
+    }
+
+    let Some(project_id) = query_value(query, "project_id") else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({
+                "error": "project_id_required"
+            }),
+        ));
     };
 
-    match result {
-        Ok(body) => write_json(&mut stream, 200, body),
-        Err(error) => write_json(
-            &mut stream,
-            500,
+    let registry = lock_registry(state)?;
+    let projects = registry
+        .list_projects()
+        .map_err(|error| error.to_string())?;
+
+    let Some(project) = projects
+        .into_iter()
+        .find(|project| project.id == project_id)
+    else {
+        return Ok(ApiResponse::new(
+            404,
             json!({
-                "error": "internal_error",
-                "message": error
+                "error": "project_not_found"
             }),
-        ),
+        ));
+    };
+
+    let Some(hostname) = project.canonical_hostname else {
+        return Ok(ApiResponse::new(
+            404,
+            json!({
+                "error": "route_not_found"
+            }),
+        ));
+    };
+
+    let port = state.proxy.bind.port();
+    let url = if port == 80 {
+        format!("http://{hostname}")
+    } else {
+        format!("http://{hostname}:{port}")
+    };
+
+    Ok(ApiResponse::ok(json!({
+        "project_id": project_id,
+        "hostname": hostname,
+        "url": url
+    })))
+}
+
+fn reserve_port(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = parse_json_body(request)?;
+
+    let Some(owner) = body
+        .get("owner")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty() && owner.len() <= 128)
+    else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({
+                "error": "valid_owner_required"
+            }),
+        ));
+    };
+
+    let mut ports = state
+        .ports
+        .lock()
+        .map_err(|_| "port manager mutex poisoned".to_string())?;
+
+    let Some(port) = ports.reserve(owner.to_string()) else {
+        return Ok(ApiResponse::new(
+            503,
+            json!({
+                "error": "no_port_available"
+            }),
+        ));
+    };
+
+    Ok(ApiResponse::new(
+        201,
+        json!({
+            "port": port,
+            "owner": owner,
+            "ttl_seconds": 60
+        }),
+    ))
+}
+
+fn release_port(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = parse_json_body(request)?;
+
+    let Some(owner) = body
+        .get("owner")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty())
+    else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({
+                "error": "owner_required"
+            }),
+        ));
+    };
+
+    let Some(port) = body
+        .get("port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+    else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({
+                "error": "valid_port_required"
+            }),
+        ));
+    };
+
+    let mut ports = state
+        .ports
+        .lock()
+        .map_err(|_| "port manager mutex poisoned".to_string())?;
+
+    if !ports.release_owned(port, owner) {
+        return Ok(ApiResponse::new(
+            409,
+            json!({
+                "error": "reservation_not_owned",
+                "port": port
+            }),
+        ));
     }
+
+    Ok(ApiResponse::ok(json!({
+        "released": true,
+        "port": port
+    })))
+}
+
+fn parse_json_body(
+    request: &http::HttpRequest,
+) -> Result<Value, String> {
+    serde_json::from_slice(&request.body)
+        .map_err(|error| format!("invalid JSON body: {error}"))
+}
+
+fn lock_registry(
+    state: &DaemonState,
+) -> Result<std::sync::MutexGuard<'_, Registry>, String> {
+    state
+        .registry
+        .lock()
+        .map_err(|_| "registry mutex poisoned".to_string())
 }
 
 fn parse_bind(
@@ -347,10 +572,15 @@ fn parse_bind(
 }
 
 fn split_target(target: &str) -> (&str, &str) {
-    target.split_once('?').unwrap_or((target, ""))
+    target
+        .split_once('?')
+        .unwrap_or((target, ""))
 }
 
-fn query_flag(query: &str, key: &str) -> bool {
+fn query_flag(
+    query: &str,
+    key: &str,
+) -> bool {
     query_value(query, key)
         .map(|value| matches!(value, "1" | "true" | "yes"))
         .unwrap_or(false)
@@ -360,36 +590,12 @@ fn query_value<'a>(
     query: &'a str,
     key: &str,
 ) -> Option<&'a str> {
-    query.split('&').find_map(|pair| {
-        let (candidate, value) = pair.split_once('=')?;
-        (candidate == key).then_some(value)
-    })
-}
-
-fn write_json(
-    stream: &mut TcpStream,
-    status: u16,
-    body: serde_json::Value,
-) -> Result<(), String> {
-    let body = serde_json::to_vec_pretty(&body)
-        .map_err(|error| error.to_string())?;
-
-    let reason = match status {
-        200 => "OK",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        _ => "Internal Server Error",
-    };
-
-    let header = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-
-    stream
-        .write_all(header.as_bytes())
-        .and_then(|_| stream.write_all(&body))
-        .map_err(|error| error.to_string())
+    query
+        .split('&')
+        .find_map(|pair| {
+            let (candidate, value) = pair.split_once('=')?;
+            (candidate == key).then_some(value)
+        })
 }
 
 fn value_after(
@@ -423,15 +629,19 @@ mod tests {
 
     #[test]
     fn parses_event_query() {
-        let (_, query) = split_target("/v1/events?after=12&limit=50");
-        assert_eq!(query_value(query, "after"), Some("12"));
-        assert_eq!(query_value(query, "limit"), Some("50"));
-    }
+        let (_, query) = split_target(
+            "/v1/events?after=12&limit=50"
+        );
 
-    #[test]
-    fn boolean_query_flags_are_explicit() {
-        assert!(query_flag("all=1", "all"));
-        assert!(!query_flag("", "all"));
+        assert_eq!(
+            query_value(query, "after"),
+            Some("12")
+        );
+
+        assert_eq!(
+            query_value(query, "limit"),
+            Some("50")
+        );
     }
 
     #[test]
@@ -461,7 +671,9 @@ mod tests {
 
         assert_eq!(
             service_socket(&service).unwrap(),
-            "127.0.0.1:3000".parse::<SocketAddr>().unwrap()
+            "127.0.0.1:3000"
+                .parse::<SocketAddr>()
+                .unwrap()
         );
     }
 }
