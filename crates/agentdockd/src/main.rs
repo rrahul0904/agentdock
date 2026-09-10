@@ -6,7 +6,7 @@ use project_resolver::resolve_project;
 use serde_json::json;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -26,6 +26,16 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let bind = value_after(&args, "--bind").unwrap_or_else(|| DEFAULT_BIND.to_string());
+    let bind_addr: SocketAddr = bind
+        .parse()
+        .map_err(|error| format!("invalid --bind address {bind}: {error}"))?;
+    let allow_non_loopback = args.iter().any(|arg| arg == "--allow-non-loopback");
+    if !bind_addr.ip().is_loopback() && !allow_non_loopback {
+        return Err(format!(
+            "refusing non-loopback API bind {bind}; pass --allow-non-loopback to acknowledge the risk"
+        ));
+    }
+
     let interval_ms = value_after(&args, "--interval-ms")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS)
@@ -39,7 +49,7 @@ fn run() -> Result<(), String> {
         .map(PathBuf::from)
         .unwrap_or_else(default_db_path);
 
-    if let Some(parent) = db_path.parent() {
+    if let Some(parent) = db_path.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
@@ -60,7 +70,7 @@ fn run() -> Result<(), String> {
         });
     }
 
-    let listener = TcpListener::bind(&bind)
+    let listener = TcpListener::bind(bind_addr)
         .map_err(|error| format!("failed to bind local API at {bind}: {error}"))?;
 
     println!("AgentDock daemon {}", env!("CARGO_PKG_VERSION"));
