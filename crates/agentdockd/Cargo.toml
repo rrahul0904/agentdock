@@ -1,0 +1,17 @@
+[package]
+name = "agentdockd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agentdockd"
+path = "src/main.rs"
+
+[dependencies]
+agentdock-core = { path = "../agentdock-core" }
+agentdock-registry = { path = "../agentdock-registry" }
+process-discovery = { path = "../process-discovery" }
+project-resolver = { path = "../project-resolver" }
+framework-detection = { path = "../framework-detection" }
+serde_json.workspace = true
