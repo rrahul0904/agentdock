@@ -122,6 +122,6 @@ mod tests {
     #[test]
     fn finds_header_boundary() {
         let bytes = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\nbody";
-        assert_eq!(find_header_end(bytes), Some(33));
+        assert_eq!(find_header_end(bytes), Some(31));
     }
 }
