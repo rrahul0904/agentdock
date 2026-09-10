@@ -374,4 +374,17 @@ mod tests {
         assert_eq!(services[0].port, 5432);
         assert_eq!(services[1].port, 6379);
     }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parses_windows_fixture() {
+        let input = include_str!("../tests/fixtures/windows_tcp.tsv");
+        let services = parse_windows(input, Protocol::Tcp);
+
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].pid, Some(41234));
+        assert_eq!(services[0].port, 3000);
+        assert_eq!(services[0].command.as_deref(), Some("node.exe"));
+        assert_eq!(services[1].port, 8000);
+    }
 }
