@@ -1,79 +1,57 @@
 # Roadmap
 
-## Completed foundation
+## Completed baseline
 
-### Phase 0
-- repository and CI
-- service model
-- project resolution
-- port reservation
-- CLI
-- MCP contract
+Phase 0:
+- repository architecture
+- CLI/MCP scaffolding
+- product and security docs
 
-### Phase 1 baseline
+Phase 1:
 - cross-platform listener discovery
-- command/cwd enrichment on Unix
-- framework classification
-- system-noise classification
+- project/framework enrichment
+- service classification
 - parser fixtures
-- cross-platform Rust CI
 
-## Next
+Phase 2:
+- agentdockd
+- SQLite persistence
+- periodic reconciliation
+- stable project/service identities
+- active/stale/orphaned lifecycle
+- event cursor
+- local HTTP API
+- CLI daemon client
 
-### Phase 2 — Local runtime daemon
-- `agentdockd`
-- SQLite
-- reliable reconciliation
-- stable identities
-- local API
-- event stream
-- stale/orphan model
+## Next - Phase 3
 
-### Phase 3 — Localhost routing
+Stable localhost routing:
+
 - reverse proxy
-- stable hostnames
-- health monitoring
+- hostname registry
 - aliases
+- collision handling
+- health-aware routes
+- fallback port
+- proxy tests
 
-### Phase 4 — Agent runtime
-- Codex/Claude/Cursor/Gemini attribution
-- worktree topology
-- resource ownership
-- safe cleanup
-- agent-aware port allocation
-- production MCP tools
+## Then - Phase 4
 
-### Verification
-- browser checks
-- console/network error capture
-- screenshots
-- MCP verification
+Agent runtime:
 
-### Sharing
-- LAN
-- QR
-- secure expiring public previews
-
-### UX
-- Tauri desktop
-- project/service table
-- agent/session detail
-- logs and health
-- preview/share controls
+- Codex attribution
+- Claude Code attribution
+- Cursor attribution
+- Gemini attribution
+- MCP tools backed by daemon
+- ownership and safe cleanup
 
 ## Later
 
-### Teams
-- shared policy
-- preview history
-- audit
-- RBAC/SSO
-- enterprise self-hosting
-
-## Explicitly deferred
-
-- custom global tunnel network
-- full cloud IDE
-- Kubernetes replacement
-- source-code hosting
-- copying private app databases into AgentDock
+- Git worktree topology
+- CPU/memory/log collection
+- browser verification
+- LAN/mDNS
+- secure expiring public previews
+- Tauri desktop control plane
+- team policies, audit, RBAC/SSO
