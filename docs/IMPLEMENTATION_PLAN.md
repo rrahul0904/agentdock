@@ -1,72 +1,64 @@
 # Implementation Plan
 
-## Phase 0 — Foundation
+## Phase 0 - Foundation
 
-Deliverables:
+Completed: product thesis, repository architecture, Rust workspace, service model, project resolver, port reservation, CLI, MCP bootstrap, CI, security model, and roadmap.
 
-- [x] product thesis
-- [x] repository architecture
-- [x] Rust workspace
-- [x] normalized service model
-- [x] process/port discovery draft
-- [x] project resolver draft
-- [x] port reservation draft
-- [x] CLI
-- [x] MCP bootstrap
-- [x] CI
-- [x] security model
-- [x] roadmap
-
-## Phase 1 — Reliable local discovery (current)
+## Phase 1 - Reliable local discovery
 
 Implemented:
 
-- [x] macOS/Linux listener parsing via `lsof`
-- [x] Windows listener/PID discovery via PowerShell
-- [x] command-line enrichment on Unix
-- [x] cwd capture on Unix
-- [x] bind-address capture
-- [x] project marker fallback resolution
-- [x] Git worktree marker recognition
-- [x] framework/runtime detection
-- [x] Docker/Podman proxy recognition
-- [x] development/infrastructure/system/unknown classification
-- [x] default system-noise hiding with `--all`
-- [x] optional UDP discovery
-- [x] fixture-driven parser tests
-- [x] cross-platform Rust CI matrix
+- macOS/Linux listener discovery with lsof
+- Windows listener/PID discovery with PowerShell
+- command-line enrichment on Unix
+- cwd capture on Unix
+- bind-address capture
+- project marker fallback
+- Git worktree marker recognition
+- framework/runtime detection
+- Docker/Podman hints
+- service classification
+- optional UDP discovery
+- fixture-driven parser tests
+- Windows parser fixture
+- cross-platform CI matrix
 
-Remaining hardening before calling discovery production-grade:
+Incremental hardening still available:
 
-- [ ] Windows cwd enrichment
-- [ ] real Docker/Podman container ID/name correlation
-- [ ] richer framework fingerprints from manifests
-- [ ] benchmark discovery on large process inventories
-- [ ] integration fixtures captured from supported OS versions
+- Windows cwd enrichment
+- real container ID/name correlation
+- manifest-aware framework fingerprints
+- large inventory benchmarks
 
-Exit criterion: reliable normalized discovery model suitable for periodic daemon reconciliation.
+## Phase 2 - Durable daemon and registry
 
-## Phase 2 — Durable daemon and registry
+Implemented:
 
-Implement:
+- agentdockd
+- SQLite schema/migration baseline
+- bundled SQLite
+- periodic service reconciliation
+- durable project IDs
+- durable service IDs
+- stable identity across project port changes
+- active/stale/orphaned lifecycle
+- resume detection
+- append-only lifecycle event log
+- cursor-based event polling
+- read-only local HTTP API
+- CLI daemon client
+- restart-safe persistence model
+- in-memory reconciliation tests
 
-- `agentdockd`
-- SQLite schema/migrations
-- service reconciliation loop
-- project identity persistence
-- local API
-- event subscriptions
-- stale/orphan state
+Known refinements:
 
-Acceptance:
+- explicit service roles for monorepos with multiple same-framework listeners
+- authenticated non-loopback API mode
+- install/start-at-login service packaging
 
-- stable project identity survives process restarts and port changes
-- daemon restarts without losing identities
-- CLI becomes a client of daemon API
+## Phase 3 - Stable localhost routing
 
-## Phase 3 — Stable localhost routing
-
-Implement:
+Next:
 
 - reverse proxy
 - hostname registry
@@ -74,16 +66,14 @@ Implement:
 - aliases
 - health-aware routing
 - fallback port mode
-- optional local TLS later
+- proxy tests
 
 Acceptance:
 
-- `project.localhost` follows project across port changes
+- project.localhost follows a project across port changes
 - proxy never exposes a service externally by default
 
-## Phase 4 — Agent attribution + MCP
-
-Implement tools:
+## Phase 4 - Agent attribution and MCP
 
 - list_services
 - get_project
@@ -92,67 +82,13 @@ Implement tools:
 - get_logs
 - get_preview_url
 - cleanup_orphans
+- Codex / Claude Code / Cursor / Gemini attribution
+- caller ownership policy
 
-Implement agent/session detection:
+## Later phases
 
-- Codex
-- Claude Code
-- Cursor
-- Gemini CLI
-- terminal/manual
-
-Acceptance:
-
-- all destructive MCP operations require ownership/policy checks
-- parallel port reservations are race-safe
-
-## Phase 5 — Worktrees and lifecycle
-
-- Git worktree registry
-- branch/revision tracking
-- process ownership
-- session end cleanup
-- protected-process rules
-- CPU/memory telemetry
-
-## Phase 6 — LAN and public previews
-
-- mDNS adapter
-- QR preview
-- explicit per-project sharing
-- Cloudflare Tunnel adapter
-- expiring share tokens
-- revocation
-
-## Phase 7 — Browser verification
-
-- headless browser adapter
-- screenshots
-- console/network errors
-- route checks
-- verification artifact model
-- MCP verification tool
-
-## Phase 8 — Desktop UX
-
-Tauri + React:
-
-- service inventory
-- project detail
-- agent sessions
-- worktrees
-- logs
-- preview controls
-- orphan cleanup
-- verification timeline
-
-## Phase 9 — Team / commercial layer
-
-Only after strong individual-developer adoption:
-
-- accounts
-- team policy
-- shared presets
-- audit events
-- SSO/RBAC
-- optional enterprise self-hosting
+- worktree topology and lifecycle
+- browser verification
+- LAN/public preview adapters
+- Tauri desktop UX
+- team policy / RBAC / enterprise self-hosting
