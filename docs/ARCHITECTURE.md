@@ -1,85 +1,103 @@
 # Architecture
 
-## Phase 2 architecture
+## Current architecture
 
 ~~~text
-CLI / MCP / future desktop
-          |
-    loopback HTTP API
-          |
-      agentdockd
-          |
-  +-------+--------+
-  |                |
-reconciliation   SQLite registry
-  |                |
-discovery       projects/services/events
+Codex / Claude / Cursor / Terminal
+                |
+        CLI / MCP / future UI
+                |
+        loopback control API
+                |
+            agentdockd
+                |
+      +---------+----------+
+      |                    |
+reconciliation         HTTP proxy
+      |                    |
+discovery           hostname resolver
+      |                    |
+      +------ SQLite ------+
+             registry
+      projects/services/routes/events
 ~~~
 
-## Registry model
-
-Project:
-- stable ID
-- root
-- Git root/worktree hint
-- first seen
-- last seen
-
-Service:
-- stable ID
-- project ID
-- latest normalized snapshot
-- lifecycle state
-- first seen
-- last seen
-- missing since
-
-Event:
-- monotonic sequence
-- lifecycle event
-- entity ID
-- JSON payload
-- timestamp
-
-## Stable identity
+## Stable identity and routing
 
 Project ID derives from project root.
 
-For project-backed services, service ID derives from:
+Project-backed service ID derives from:
 
 - project ID
 - protocol
 - framework
 - executable/process name
 
-Port is intentionally excluded so restarts can move ports without changing AgentDock identity.
+Port is excluded.
 
-Unknown/unowned services retain bind address and port in the fallback identity to avoid accidental collapsing.
-
-## Reconciliation lifecycle
+Each project receives a canonical hostname such as:
 
 ~~~text
-ACTIVE --missed--> STALE --threshold--> ORPHANED
-  ^                                  |
-  +------------ observed ------------+
+storefront.localhost
 ~~~
 
-## Local API
-
-Phase 2 uses a small HTTP/1.1 loopback server built on std::net::TcpListener.
-
-The API is read-only. This avoids introducing destructive remote operations before caller identity and resource ownership are implemented.
-
-## Event subscriptions
-
-Clients poll:
+If two projects have the same name, one keeps the short hostname and the other receives a deterministic suffix such as:
 
 ~~~text
-GET /v1/events?after=<last_seq>
+app.localhost
+app-a1b2c3.localhost
 ~~~
 
-SQLite supplies a monotonic cursor. This is sufficient for the CLI, MCP bridge, and first desktop client.
+The proxy resolves only ACTIVE services classified as development.
 
-## Phase 3
+## Proxy data path
 
-The next layer is a local reverse proxy that resolves stable hostnames from the durable service registry.
+~~~text
+browser
+  |
+Host: storefront.localhost:7777
+  |
+agentdock-proxy
+  |
+route registry
+  |
+active service record
+  |
+127.0.0.1:<current-port>
+~~~
+
+The proxy supports normal HTTP traffic and bidirectional TCP forwarding after the initial HTTP Host header has been resolved, which also keeps WebSocket-style upgrades possible.
+
+## Control API
+
+The control API remains separate from proxied application traffic.
+
+Default:
+
+~~~text
+127.0.0.1:7317
+~~~
+
+The proxy default:
+
+~~~text
+127.0.0.1:7777
+~~~
+
+Both refuse non-loopback binds unless the user explicitly passes --allow-non-loopback.
+
+## Persistence
+
+SQLite tables:
+
+- metadata
+- projects
+- services
+- routes
+- events
+
+Schema version: 2.
+
+## Next boundary
+
+Phase 4 adds agent/session identity and ownership policy before any destructive process controls are exposed through MCP.
