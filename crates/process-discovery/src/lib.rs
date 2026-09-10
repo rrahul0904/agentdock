@@ -275,7 +275,7 @@ fn parse_windows(input: &str, protocol: Protocol) -> Vec<Service> {
     let mut services = Vec::new();
 
     for line in input.lines() {
-        let fields: Vec<&str> = line.split('	').collect();
+        let fields: Vec<&str> = line.split('\\t').collect();
         if fields.len() < 3 {
             continue;
         }
