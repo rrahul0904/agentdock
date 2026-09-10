@@ -3,51 +3,50 @@
 ## Completed baseline
 
 ### Phase 0
-- repository architecture
+- project architecture
+- core models
 - CLI/MCP scaffolding
-- product and security docs
 
 ### Phase 1
-- cross-platform listener discovery
+- cross-platform service discovery
 - project/framework enrichment
-- service classification
-- parser fixtures
 
 ### Phase 2
 - agentdockd
 - SQLite persistence
-- periodic reconciliation
-- stable identities
-- lifecycle state
-- event cursor
-- local control API
+- reconciliation/lifecycle
+- local API
 
 ### Phase 3
-- canonical .localhost routes
-- route collision handling
-- local reverse proxy
-- port-change transparent routing
-- route API and CLI inspection
+- persistent .localhost routes
+- reverse proxy
+- collision handling
+- transparent port changes
 
-## Next - Phase 4
+### Phase 4
+- Codex / Claude Code / Cursor / Gemini ancestry attribution
+- session-owned port reservations
+- daemon-backed MCP v2 tools
+- preview lookup
+- orphan dry-run inventory
 
-Agent-aware runtime:
+## Next - Phase 5
 
-- Codex attribution
-- Claude Code attribution
-- Cursor attribution
-- Gemini attribution
-- daemon-backed MCP tools
-- session ownership
-- safe port reservation/release
-- bounded orphan cleanup
+Durable ownership and worktree lifecycle:
+
+- AgentSession persistence
+- parent/child process ownership
+- Git worktree topology
+- branch/revision state
+- bounded logs
+- service health checks
+- safe cleanup eligibility
+- persistent reservation ownership
 
 ## Later
 
-- Git worktree topology
-- CPU/memory/log collection
 - browser verification
-- LAN/mDNS
-- secure expiring public previews
+- mDNS/LAN sharing
+- secure public previews
 - Tauri desktop control plane
-- team policies, audit, RBAC/SSO
+- team policy/audit/RBAC/SSO
