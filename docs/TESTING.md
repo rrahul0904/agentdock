@@ -1,55 +1,49 @@
 # Testing Strategy
 
-## Current automated checks
+## CI matrix
 
-GitHub Actions runs the Rust workspace on:
+The repository CI configuration runs Rust checks on Ubuntu, macOS, and Windows:
 
-- Ubuntu
-- macOS
-- Windows
+- cargo fmt --all -- --check
+- cargo check --workspace
+- cargo test --workspace
 
-Checks:
+## Phase 1 tests
 
-- `cargo fmt --all -- --check`
-- `cargo check --workspace`
-- `cargo test --workspace`
+- stable hostname slug
+- discovery fixture parsing
+- framework fingerprints
+- project fallback identity
+- port reservation lifecycle
+- Windows listener/parser fixture
 
-## Unit tests
+## Phase 2 tests
 
-### agentdock-core
-- stable hostname slug behavior
-- default service visibility
+Registry:
+- service ID survives project port changes
+- active -> stale -> orphaned transitions
+- orphaned -> active resume
 
-### framework-detection
-- framework fingerprint classification
-
-### project-resolver
-- fallback project identity
-
-### port-manager
-- reservation lifecycle
-
-### process-discovery
-- representative macOS `lsof` parser fixture
-- representative Linux `lsof` parser fixture
-- IPv6 endpoint parsing
-
-## Phase 2 additions
-
-The daemon phase should add:
-
-- SQLite migration tests
-- reconciliation state-machine tests
-- repeated-scan idempotency
-- stale/orphan transition tests
-- local API contract tests
-- restart persistence tests
+Daemon:
+- event query parsing
+- boolean query flags
 
 ## Manual smoke test
 
-```bash
+Terminal 1:
+
+~~~bash
+cargo run -p agentdockd
+~~~
+
+Terminal 2:
+
+~~~bash
 cargo run -p agentdock-cli -- doctor
-cargo run -p agentdock-cli -- scan
-cargo run -p agentdock-cli -- scan --all
-cargo run -p agentdock-cli -- scan --json --all
-```
+cargo run -p agentdock-cli -- daemon status
+cargo run -p agentdock-cli -- daemon services --all
+cargo run -p agentdock-cli -- daemon projects
+cargo run -p agentdock-cli -- daemon events
+~~~
+
+Restart the daemon and confirm IDs persist in ~/.agentdock/agentdock.db.
