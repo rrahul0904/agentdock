@@ -54,7 +54,32 @@ impl PortManager {
         None
     }
 
+    pub fn release_owned(&mut self, port: u16, owner: &str) -> bool {
+        self.reap();
+
+        let owned = self
+            .reservations
+            .get(&port)
+            .map(|reservation| reservation.owner == owner)
+            .unwrap_or(false);
+
+        if owned {
+            self.reservations.remove(&port);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn owner(&mut self, port: u16) -> Option<String> {
+        self.reap();
+        self.reservations
+            .get(&port)
+            .map(|reservation| reservation.owner.clone())
+    }
+
     pub fn release(&mut self, port: u16) -> bool {
+        self.reap();
         self.reservations.remove(&port).is_some()
     }
 
@@ -79,11 +104,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reservation_can_be_released() {
+    fn reservation_can_be_released_by_owner() {
         let mut manager = PortManager::new(45000, 45100, Duration::from_secs(60));
-        if let Some(port) = manager.reserve("test") {
+
+        if let Some(port) = manager.reserve("session-a") {
+            assert!(!manager.release_owned(port, "session-b"));
             assert!(manager.is_reserved(port));
-            assert!(manager.release(port));
+            assert!(manager.release_owned(port, "session-a"));
             assert!(!manager.is_reserved(port));
         }
     }
