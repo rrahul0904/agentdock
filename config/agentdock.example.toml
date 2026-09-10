@@ -15,10 +15,12 @@ include_containers = true
 include_udp = false
 
 [proxy]
-enabled = false
+enabled = true
+bind = "127.0.0.1"
 http_port = 7777
 domain_suffix = "localhost"
 
 [security]
 public_sharing_enabled = false
 allow_process_termination = false
+allow_non_loopback = false
