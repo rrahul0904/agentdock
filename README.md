@@ -1,10 +1,10 @@
 # AgentDock
 
-AgentDock is an AI local development control plane for orchestrating projects, ports, processes, previews, worktrees, and coding agents.
+AgentDock is an AI local development control plane for orchestrating projects, ports, processes, stable local URLs, worktrees, and coding agents.
 
 ## Current status
 
-Phase 2 durable daemon and registry baseline is implemented.
+Phase 3 stable localhost routing baseline is implemented.
 
 AgentDock now includes:
 
@@ -13,12 +13,13 @@ AgentDock now includes:
 - SQLite-backed durable registry
 - stable project and service IDs
 - active -> stale -> orphaned lifecycle tracking
-- resume detection
-- append-only lifecycle event log
 - periodic daemon reconciliation
-- read-only loopback HTTP API
+- canonical .localhost hostnames
+- deterministic hostname collision handling
+- local HTTP reverse proxy
+- read-only loopback control API
 - CLI daemon client
-- fixture/unit tests
+- route/event inspection
 - cross-platform CI configuration
 
 ## Run locally
@@ -35,26 +36,67 @@ Start the daemon:
 cargo run -p agentdockd
 ~~~
 
-Default database:
+The control API listens on:
 
 ~~~text
-~/.agentdock/agentdock.db
+127.0.0.1:7317
 ~~~
 
-Inspect the daemon from another terminal:
+The local proxy listens on:
+
+~~~text
+127.0.0.1:7777
+~~~
+
+If a project is named storefront, browse:
+
+~~~text
+http://storefront.localhost:7777
+~~~
+
+If you explicitly bind the proxy to port 80 and your OS allows it:
+
+~~~bash
+cargo run -p agentdockd -- --proxy-bind 127.0.0.1:80
+~~~
+
+then the bare URL becomes:
+
+~~~text
+http://storefront.localhost
+~~~
+
+## Durable routing
+
+A project service can move from port 3000 to 3007 while keeping the same AgentDock identity and hostname.
+
+~~~text
+storefront.localhost:7777
+        |
+        v
+AgentDock canonical route
+        |
+        v
+latest ACTIVE development service
+        |
+        +-- 3000
+        |
+        +-- restart
+        |
+        +-- 3007
+~~~
+
+Stale, orphaned, infrastructure, system, and unknown listeners are not selected as HTTP proxy targets.
+
+## CLI
 
 ~~~bash
 cargo run -p agentdock-cli -- daemon status
 cargo run -p agentdock-cli -- daemon services
 cargo run -p agentdock-cli -- daemon services --all
 cargo run -p agentdock-cli -- daemon projects
+cargo run -p agentdock-cli -- daemon routes
 cargo run -p agentdock-cli -- daemon events
-~~~
-
-Custom daemon settings:
-
-~~~bash
-cargo run -p agentdockd -- --bind 127.0.0.1:7317 --interval-ms 2000 --orphan-after-ms 30000 --db /tmp/agentdock.db
 ~~~
 
 ## Local API
@@ -64,21 +106,15 @@ cargo run -p agentdockd -- --bind 127.0.0.1:7317 --interval-ms 2000 --orphan-aft
 - GET /v1/services
 - GET /v1/services?all=1
 - GET /v1/projects
+- GET /v1/routes
 - GET /v1/events?after=0&limit=200
 
-See docs/API.md.
+## Persistence
 
-## Durable identity
-
-Project-backed service identity excludes the port. A project service can move from port 3000 to 3007 while retaining the same AgentDock service ID.
-
-Lifecycle:
+Default database:
 
 ~~~text
-observed -> ACTIVE
-missed scan -> STALE
-missing beyond threshold -> ORPHANED
-reappears -> ACTIVE
+~/.agentdock/agentdock.db
 ~~~
 
 ## Repository layout
@@ -91,6 +127,7 @@ crates/
   framework-detection/
   port-manager/
   agentdock-registry/
+  agentdock-proxy/
   agentdockd/
   agentdock-cli/
 
@@ -104,16 +141,16 @@ docs/
   IMPLEMENTATION_PLAN.md
   PHASE_1_DISCOVERY.md
   PHASE_2_DAEMON.md
+  PHASE_3_PROXY.md
   API.md
   SECURITY_MODEL.md
   MCP_DESIGN.md
   ROADMAP.md
-  TESTING.md
 ~~~
 
 ## Next
 
-Phase 3 adds the reverse proxy and stable *.localhost routing on top of the durable registry.
+Phase 4 moves the MCP bridge onto the daemon API and adds agent/session attribution, ownership-aware port reservations, and safe cleanup.
 
 ## License
 
