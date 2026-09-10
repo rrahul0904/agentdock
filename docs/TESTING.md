@@ -2,31 +2,70 @@
 
 ## CI matrix
 
-The repository CI configuration runs Rust checks on Ubuntu, macOS, and Windows:
+Rust:
+
+- Ubuntu
+- macOS
+- Windows
+
+Checks:
 
 - cargo fmt --all -- --check
 - cargo check --workspace
 - cargo test --workspace
 
-## Phase 1 tests
+MCP:
 
-- stable hostname slug
-- discovery fixture parsing
-- framework fingerprints
-- project fallback identity
-- port reservation lifecycle
-- Windows listener/parser fixture
+- Node 22
+- pnpm install
+- TypeScript build of @agentdock/mcp-server
 
-## Phase 2 tests
+## Current unit coverage
+
+Discovery:
+
+- representative macOS/Linux listeners
+- Windows listener parsing
+- IPv6 endpoint parsing
+
+Core:
+
+- hostname slug
+- lifecycle-state round trip
+
+Frameworks:
+
+- representative runtime fingerprints
+
+Agent attribution:
+
+- Codex
+- Claude Code
+- Cursor
+- regular Node negative case
+
+Port manager:
+
+- reservation ownership
+- wrong-owner release rejection
 
 Registry:
-- service ID survives project port changes
-- active -> stale -> orphaned transitions
-- orphaned -> active resume
+
+- stable service ID across port changes
+- active/stale/orphaned lifecycle
+- route follows port changes
+- route collision suffixes
+
+Proxy:
+
+- Host extraction
+- hostname normalization
 
 Daemon:
+
+- bounded HTTP header parsing
 - event query parsing
-- boolean query flags
+- wildcard service target mapping
 
 ## Manual smoke test
 
@@ -39,11 +78,18 @@ cargo run -p agentdockd
 Terminal 2:
 
 ~~~bash
-cargo run -p agentdock-cli -- doctor
 cargo run -p agentdock-cli -- daemon status
 cargo run -p agentdock-cli -- daemon services --all
 cargo run -p agentdock-cli -- daemon projects
-cargo run -p agentdock-cli -- daemon events
+cargo run -p agentdock-cli -- daemon routes
 ~~~
 
-Restart the daemon and confirm IDs persist in ~/.agentdock/agentdock.db.
+MCP:
+
+~~~bash
+pnpm install
+pnpm mcp:build
+pnpm mcp:dev
+~~~
+
+Use the MCP Inspector or a compatible host to call the registered tools.
