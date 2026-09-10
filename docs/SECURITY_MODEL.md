@@ -4,85 +4,76 @@
 
 AgentDock is local-first and private-by-default.
 
-Discovery does not imply exposure. A discovered service remains bound exactly as its owning process configured it unless the user explicitly enables an AgentDock route or share.
+Discovery does not imply exposure.
+
+The control API and proxy bind to loopback by default and reject non-loopback addresses unless the user explicitly acknowledges the risk.
 
 ## Trust boundaries
 
 1. operating system
-2. AgentDock daemon
-3. local clients (CLI/Desktop/MCP)
+2. agentdockd
+3. local CLI / MCP / desktop clients
 4. LAN
 5. public internet
-6. optional cloud control plane
-
-Each boundary must require an explicit capability.
+6. optional future cloud control plane
 
 ## Discovery privacy
 
-The discovery layer intentionally captures only operational metadata required to map listeners to projects:
+AgentDock may inspect:
 
 - process name
 - command line
 - cwd
+- process ancestry
 - bind address
 - port
 
-It does **not** capture process environments, source files, request bodies, or application secrets.
+It does not intentionally collect process environments, source code, request bodies, or application secrets.
 
-Command lines can themselves contain secrets. Future persistence/logging must therefore apply redaction before durable storage.
+Command lines can contain secrets; future durable process/log storage must redact before persistence.
+
+## MCP ownership
+
+Each MCP bridge instance creates a session owner token unless AGENTDOCK_SESSION_ID is supplied by the host.
+
+Port reservation ownership is injected by the bridge rather than model-controlled.
+
+A release request for a reservation owned by another session fails.
 
 ## Destructive operations
 
-Process termination, orphan cleanup, port release, and worktree cleanup must enforce:
+There is currently no generic process-kill API.
 
-- caller identity when available
-- resource ownership
+cleanup_orphans is dry-run only.
+
+Before destructive cleanup is enabled AgentDock must have evidence connecting:
+
+~~~text
+AgentSession -> Process -> Service -> Project/Worktree
+~~~
+
+and apply:
+
+- ownership checks
 - protected-process denylist
+- bounded targets
+- audit events
 - explicit policy
-- audit event
-- bounded target selection
 
-Never implement broad commands equivalent to `killall node`.
+Never implement broad behavior equivalent to killall node.
 
-## MCP
+## MCP surface
 
-MCP is a powerful local control surface. Rules:
+MCP exposes structured domain tools only.
 
-- read-only tools first
-- daemon owns authorization logic
-- Node MCP bridge does not execute arbitrary shell commands
-- tool arguments are structured
-- no raw command execution tool
-- cleanup tools require ownership evidence
-- configurable confirmation/policy for destructive actions
+It does not expose:
+
+- raw shell
+- unrestricted filesystem reads
+- arbitrary command execution
+- environment dumps
+- generic PID termination
 
 ## Public previews
 
-Future public sharing must include:
-
-- cryptographically strong random tokens
-- server-side or local hashed token storage
-- explicit expiration
-- revocation
-- route-level allowlist
-- no automatic database/admin-port exposure
-- rate limiting where applicable
-- optional password / identity gate
-
-## Secrets
-
-Do not persist application environment secrets or capture process environments by default.
-
-Logs should be treated as potentially sensitive and redacted where practical.
-
-## Telemetry
-
-Core operation must not require telemetry.
-
-If product analytics are added:
-
-- opt-out
-- no source code
-- no environment variables
-- no captured request bodies
-- document every collected field
+Future public sharing must add explicit expiration, revocation, cryptographically strong access tokens, route allowlists, and rate controls.
