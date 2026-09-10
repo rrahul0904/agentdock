@@ -1,7 +1,7 @@
 {
   "name": "agentdock",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.5.0",
   "packageManager": "pnpm@10.0.0",
   "scripts": {
     "mcp:dev": "pnpm --filter @agentdock/mcp-server dev",
