@@ -1,6 +1,6 @@
 # Local API
 
-AgentDock exposes a read-only loopback control API from agentdockd.
+AgentDock exposes a loopback control API from agentdockd.
 
 Default:
 
@@ -8,39 +8,68 @@ Default:
 127.0.0.1:7317
 ~~~
 
-## Endpoints
+## Read endpoints
 
-GET /healthz
+### GET /healthz
 
-Returns daemon health and version.
+Daemon liveness and version.
 
-GET /v1/status
+### GET /v1/status
 
-Returns daemon and registry counts, including route count.
+Daemon, proxy, and durable registry status.
 
-GET /v1/services
+### GET /v1/services
 
-Returns development and infrastructure service records.
+Development/infrastructure services.
 
-GET /v1/services?all=1
+Use all=1 to include system and unknown listeners.
 
-Also returns system and unknown listeners.
+### GET /v1/projects
 
-GET /v1/projects
+Durable projects and canonical hostnames.
 
-Returns durable project identities and canonical hostnames.
+### GET /v1/routes
 
-GET /v1/routes
+Persistent localhost routes.
 
-Returns canonical and alias route records.
+### GET /v1/events?after=<seq>&limit=<n>
 
-GET /v1/events?after=<seq>&limit=<n>
+Lifecycle events after a monotonic cursor.
 
-Returns lifecycle events after a monotonically increasing cursor.
+### GET /v1/preview?project_id=<id>
+
+Returns the stable local preview URL for a project.
+
+## Structured write endpoints
+
+### POST /v1/ports/reserve
+
+Body:
+
+~~~json
+{
+  "owner": "session-token"
+}
+~~~
+
+Returns a free port reserved for 60 seconds.
+
+### POST /v1/ports/release
+
+Body:
+
+~~~json
+{
+  "owner": "session-token",
+  "port": 4317
+}
+~~~
+
+Release succeeds only when the owner matches the reservation.
+
+Malformed JSON returns a structured HTTP 400.
 
 ## Proxy
-
-The HTTP proxy is a separate listener.
 
 Default:
 
@@ -54,14 +83,12 @@ Example:
 http://storefront.localhost:7777
 ~~~
 
-The proxy returns:
+Unknown route -> 404.
 
-- 404 for an unknown AgentDock hostname
-- 503 for a known project with no active development service
-- upstream response when the route resolves successfully
+Known route without active development service -> 503.
 
 ## Security
 
-Both control API and proxy refuse non-loopback binds unless --allow-non-loopback is explicitly supplied.
+Control API and proxy refuse non-loopback binds unless --allow-non-loopback is explicitly supplied.
 
-The Phase 3 API remains read-only.
+The API does not expose arbitrary process termination or shell commands.
