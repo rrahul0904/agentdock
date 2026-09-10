@@ -2,12 +2,17 @@
 bind = "127.0.0.1"
 port = 7317
 scan_interval_ms = 2000
+orphan_after_ms = 30000
+
+[storage]
+path = "~/.agentdock/agentdock.db"
 
 [discovery]
 include_loopback = true
 include_system = false
 include_unknown = false
 include_containers = true
+include_udp = false
 
 [proxy]
 enabled = false
