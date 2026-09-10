@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 agentdock-core = { path = "../agentdock-core" }
 agentdock-registry = { path = "../agentdock-registry" }
+agentdock-proxy = { path = "../agentdock-proxy" }
 process-discovery = { path = "../process-discovery" }
 project-resolver = { path = "../project-resolver" }
 framework-detection = { path = "../framework-detection" }
