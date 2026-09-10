@@ -86,10 +86,11 @@ fn daemon(args: &[String]) {
         "services" if include_all => "/v1/services?all=1",
         "services" => "/v1/services",
         "projects" => "/v1/projects",
+        "routes" => "/v1/routes",
         "events" => "/v1/events?limit=200",
         _ => {
             eprintln!("Unknown daemon command: {command}");
-            eprintln!("Use: agentdock daemon [status|services|projects|events] [--all]");
+            eprintln!("Use: agentdock daemon [status|services|projects|routes|events] [--all]");
             std::process::exit(2);
         }
     };
@@ -169,6 +170,7 @@ fn help() {
     println!("  agentdock daemon status");
     println!("  agentdock daemon services [--all]");
     println!("  agentdock daemon projects");
+    println!("  agentdock daemon routes");
     println!("  agentdock daemon events");
     println!("  agentdock doctor");
 }
