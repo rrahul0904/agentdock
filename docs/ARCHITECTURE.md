@@ -3,26 +3,48 @@
 ## Current architecture
 
 ~~~text
-Codex / Claude / Cursor / Terminal
-                |
-        CLI / MCP / future UI
-                |
-        loopback control API
-                |
-            agentdockd
-                |
-      +---------+----------+
-      |                    |
-reconciliation         HTTP proxy
-      |                    |
-discovery           hostname resolver
-      |                    |
-      +------ SQLite ------+
-             registry
-      projects/services/routes/events
+Codex / Claude Code / Cursor / Gemini / Terminal
+                       |
+                 process ancestry
+                       |
+                Agent attribution
+                       |
+          +------------+------------+
+          |                         |
+        MCP v2                     CLI
+          |                         |
+          +------------+------------+
+                       |
+               loopback control API
+                       |
+                   agentdockd
+                       |
+      +----------------+-----------------+
+      |                |                 |
+reconciliation     port manager       HTTP proxy
+      |                |                 |
+discovery       owner reservations   route resolver
+      |                                  |
+      +--------------- SQLite -----------+
+              projects/services/routes/events
 ~~~
 
-## Stable identity and routing
+## Discovery and agent attribution
+
+The discovery layer maps listeners to PID, command, cwd, project, framework, and lifecycle data.
+
+Agent attribution then walks a bounded parent-process chain to identify known coding-agent ancestors:
+
+- Codex
+- Claude Code
+- Cursor
+- Gemini CLI
+
+The current session identifier is heuristic: agent kind plus detected ancestor PID.
+
+Persistent session identity belongs to the next lifecycle phase.
+
+## Durable identity
 
 Project ID derives from project root.
 
@@ -33,44 +55,27 @@ Project-backed service ID derives from:
 - framework
 - executable/process name
 
-Port is excluded.
+Port is intentionally excluded so restarts can change ports without changing AgentDock identity.
 
-Each project receives a canonical hostname such as:
+## Stable localhost routing
+
+Each project receives a canonical route such as:
 
 ~~~text
 storefront.localhost
 ~~~
 
-If two projects have the same name, one keeps the short hostname and the other receives a deterministic suffix such as:
+Same-name projects receive a deterministic suffix.
+
+The proxy selects only ACTIVE development services.
+
+Default proxy:
 
 ~~~text
-app.localhost
-app-a1b2c3.localhost
+127.0.0.1:7777
 ~~~
 
-The proxy resolves only ACTIVE services classified as development.
-
-## Proxy data path
-
-~~~text
-browser
-  |
-Host: storefront.localhost:7777
-  |
-agentdock-proxy
-  |
-route registry
-  |
-active service record
-  |
-127.0.0.1:<current-port>
-~~~
-
-The proxy supports normal HTTP traffic and bidirectional TCP forwarding after the initial HTTP Host header has been resolved, which also keeps WebSocket-style upgrades possible.
-
-## Control API
-
-The control API remains separate from proxied application traffic.
+## Daemon control API
 
 Default:
 
@@ -78,26 +83,80 @@ Default:
 127.0.0.1:7317
 ~~~
 
-The proxy default:
+The daemon has two classes of operations.
+
+Read operations:
+
+- status
+- services
+- projects
+- routes
+- events
+- preview lookup
+
+Narrow write operations:
+
+- reserve a port for an explicit owner
+- release a port only for the same owner
+
+There is no arbitrary shell or generic process-termination API.
+
+## MCP boundary
+
+The TypeScript MCP bridge does not manage OS resources directly.
 
 ~~~text
-127.0.0.1:7777
+MCP host
+   |
+session owner token
+   |
+MCP stdio bridge
+   |
+structured daemon API
+   |
+Rust ownership/policy boundary
 ~~~
 
-Both refuse non-loopback binds unless the user explicitly passes --allow-non-loopback.
+The bridge injects its own reservation owner token so a model cannot impersonate another MCP session when releasing ports.
+
+## Cleanup boundary
+
+Lifecycle state alone is not enough evidence to terminate a process.
+
+Destructive orphan cleanup remains disabled until AgentDock can persist a trustworthy graph:
+
+~~~text
+AgentSession
+    |
+    +-- Worktree / branch / revision
+    |
+    +-- Process ownership
+            |
+            +-- Service
+            |
+            +-- port reservation
+~~~
 
 ## Persistence
 
-SQLite tables:
+SQLite currently stores:
 
 - metadata
 - projects
 - services
 - routes
-- events
+- lifecycle events
 
-Schema version: 2.
+Port reservations are intentionally in-memory and expire after 60 seconds.
 
-## Next boundary
+Persistent AgentSession and reservation ownership are Phase-5 work.
 
-Phase 4 adds agent/session identity and ownership policy before any destructive process controls are exposed through MCP.
+## Network security
+
+Control API and proxy bind to loopback by default.
+
+Non-loopback binding requires explicit --allow-non-loopback acknowledgement.
+
+## Next architecture layer
+
+Phase 5 introduces durable AgentSession/worktree/process ownership, bounded logs, service health, and cleanup eligibility rules.
