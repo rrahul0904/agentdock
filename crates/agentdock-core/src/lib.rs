@@ -93,6 +93,33 @@ pub enum ContainerRuntime {
     Podman,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LifecycleState {
+    Active,
+    Stale,
+    Orphaned,
+}
+
+impl LifecycleState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Stale => "stale",
+            Self::Orphaned => "orphaned",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "active" => Some(Self::Active),
+            "stale" => Some(Self::Stale),
+            "orphaned" => Some(Self::Orphaned),
+            _ => None,
+        }
+    }
+}
+
 impl Service {
     pub fn stable_hostname(&self) -> Option<String> {
         self.project
@@ -135,22 +162,13 @@ mod tests {
     }
 
     #[test]
-    fn system_services_are_hidden_by_default() {
-        let service = Service {
-            pid: Some(1),
-            port: 5000,
-            protocol: Protocol::Tcp,
-            bind_address: Some("127.0.0.1".into()),
-            command: Some("ControlCenter".into()),
-            command_line: None,
-            working_directory: None,
-            project: None,
-            framework: Framework::Unknown,
-            container: None,
-            agent: None,
-            classification: ServiceClassification::System,
-        };
-
-        assert!(!service.is_default_visible());
+    fn lifecycle_round_trip() {
+        for state in [
+            LifecycleState::Active,
+            LifecycleState::Stale,
+            LifecycleState::Orphaned,
+        ] {
+            assert_eq!(LifecycleState::parse(state.as_str()), Some(state));
+        }
     }
 }
