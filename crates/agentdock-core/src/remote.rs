@@ -52,21 +52,17 @@ mod tests {
 
     #[test]
     fn all_remote_capabilities_require_pairing() {
-        assert!(
-            remote_capabilities()
-                .iter()
-                .all(|capability| capability.requires_pairing)
-        );
+        assert!(remote_capabilities()
+            .iter()
+            .all(|capability| capability.requires_pairing));
     }
 
     #[test]
     fn mutating_remote_capabilities_require_explicit_approval() {
-        assert!(
-            remote_capabilities()
-                .iter()
-                .filter(|capability| capability.mutating)
-                .all(|capability| capability.requires_approval)
-        );
+        assert!(remote_capabilities()
+            .iter()
+            .filter(|capability| capability.mutating)
+            .all(|capability| capability.requires_approval));
     }
 
     #[test]
