@@ -309,6 +309,46 @@ fn route_api(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResp
             })))
         }
 
+        ("GET", "/v1/agent-sessions") => {
+            let registry = lock_registry(state)?;
+            let sessions = registry
+                .list_agent_sessions()
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "sessions": sessions
+            })))
+        }
+
+        ("GET", "/v1/agent-session-logs") => {
+            let Some(session_id) = query_value(query, "session_id")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return Ok(ApiResponse::new(
+                    400,
+                    json!({"error": "session_id_required"}),
+                ));
+            };
+
+            let after = query_value(query, "after")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(0);
+            let limit = query_value(query, "limit")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(200);
+
+            let registry = lock_registry(state)?;
+            let logs = registry
+                .list_agent_session_logs(session_id, after, limit)
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "session_id": session_id,
+                "logs": logs
+            })))
+        }
+
         ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
             "enabled": false,
             "transport": "not_configured",
