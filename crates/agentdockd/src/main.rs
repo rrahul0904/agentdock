@@ -3,7 +3,9 @@ mod http;
 use agent_attribution::enrich_agent;
 use agentdock_core::{remote::remote_capabilities, Service};
 use agentdock_proxy::{ProxyTarget, TargetResolver};
-use agentdock_registry::{now_ms, Registry, ServiceRecord};
+use agentdock_registry::{now_ms, Registry, RegistryError, ServiceRecord};
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use framework_detection::enrich_service;
 use port_manager::PortManager;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -20,6 +22,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:7317";
 const DEFAULT_PROXY_BIND: &str = "127.0.0.1:7777";
 const DEFAULT_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
+const PAIRING_CHALLENGE_TTL_MS: i64 = 5 * 60 * 1_000;
 
 fn main() {
     if let Err(error) = run() {
@@ -243,15 +246,23 @@ fn handle_client(mut stream: TcpStream, state: &DaemonState) -> Result<(), Strin
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| error.to_string())?;
+    let peer_is_loopback = stream
+        .peer_addr()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false);
 
     let request = http::read_request(&mut stream).map_err(|error| error.to_string())?;
 
-    let response = route_api(&request, state)?;
+    let response = route_api(&request, state, peer_is_loopback)?;
 
     http::write_json(&mut stream, response.status, response.body).map_err(|error| error.to_string())
 }
 
-fn route_api(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResponse, String> {
+fn route_api(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+    peer_is_loopback: bool,
+) -> Result<ApiResponse, String> {
     let (path, query) = split_target(&request.target);
 
     match (request.method.as_str(), path) {
@@ -349,10 +360,54 @@ fn route_api(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResp
             })))
         }
 
+        ("POST", "/v1/pairing/challenges") => {
+            require_loopback(peer_is_loopback)?;
+            create_pairing_challenge(state)
+        }
+
+        ("POST", "/v1/pairing/requests") => {
+            require_loopback(peer_is_loopback)?;
+            submit_pairing_request(request, state)
+        }
+
+        ("GET", "/v1/pairing/requests") => {
+            require_loopback(peer_is_loopback)?;
+            let pending_only = !query_flag(query, "all");
+            let registry = lock_registry(state)?;
+            let requests = registry
+                .list_pairing_requests(pending_only)
+                .map_err(|error| error.to_string())?;
+            Ok(ApiResponse::ok(json!({"requests": requests})))
+        }
+
+        ("POST", "/v1/pairing/requests/approve") => {
+            require_loopback(peer_is_loopback)?;
+            decide_pairing_request(request, state, true)
+        }
+
+        ("POST", "/v1/pairing/requests/deny") => {
+            require_loopback(peer_is_loopback)?;
+            decide_pairing_request(request, state, false)
+        }
+
+        ("GET", "/v1/paired-devices") => {
+            require_loopback(peer_is_loopback)?;
+            let registry = lock_registry(state)?;
+            let devices = registry
+                .list_paired_devices(query_flag(query, "all"))
+                .map_err(|error| error.to_string())?;
+            Ok(ApiResponse::ok(json!({"devices": devices})))
+        }
+
+        ("POST", "/v1/paired-devices/revoke") => {
+            require_loopback(peer_is_loopback)?;
+            revoke_paired_device(request, state)
+        }
+
         ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
             "enabled": false,
             "transport": "not_configured",
-            "pairing": "not_implemented",
+            "pairing": "local_approval_ready",
             "capabilities": remote_capabilities(),
             "safety": {
                 "generic_shell": false,
@@ -393,6 +448,212 @@ fn route_api(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResp
             json!({"error": "method_not_allowed"}),
         )),
     }
+}
+
+fn require_loopback(peer_is_loopback: bool) -> Result<(), String> {
+    if peer_is_loopback {
+        Ok(())
+    } else {
+        Err("pairing administration is restricted to loopback clients".to_string())
+    }
+}
+
+fn create_pairing_challenge(state: &DaemonState) -> Result<ApiResponse, String> {
+    let created_at_ms = now_ms();
+    let expires_at_ms = created_at_ms.saturating_add(PAIRING_CHALLENGE_TTL_MS);
+    let challenge_id = format!("pc_{}", random_hex(16));
+    let secret = random_hex(32);
+    let secret_hash = sha256_hex(&secret);
+
+    let mut registry = lock_registry(state)?;
+    let challenge = registry
+        .create_pairing_challenge(
+            &challenge_id,
+            &secret_hash,
+            created_at_ms,
+            expires_at_ms,
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(ApiResponse::new(
+        201,
+        json!({
+            "challenge": challenge,
+            "secret": secret,
+            "one_time": true,
+            "requires_local_approval": true
+        }),
+    ))
+}
+
+fn submit_pairing_request(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+
+    let Some(challenge_id) = valid_json_string(&body, "challenge_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_challenge_id_required"}),
+        ));
+    };
+    let Some(secret) = valid_json_string(&body, "secret", 256) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_secret_required"}),
+        ));
+    };
+    let Some(device_name) = valid_json_string(&body, "device_name", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_name_required"}),
+        ));
+    };
+    let Some(device_public_key) = valid_json_string(&body, "device_public_key", 4096) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_public_key_required"}),
+        ));
+    };
+
+    let mut registry = lock_registry(state)?;
+    match registry.submit_pairing_request(
+        challenge_id,
+        &sha256_hex(secret),
+        device_name,
+        device_public_key,
+        now_ms(),
+    ) {
+        Ok(pairing_request) => Ok(ApiResponse::new(
+            202,
+            json!({
+                "request": pairing_request,
+                "approved": false,
+                "requires_local_approval": true
+            }),
+        )),
+        Err(error) => pairing_registry_error(error),
+    }
+}
+
+fn decide_pairing_request(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+    approve: bool,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+    let Some(request_id) = valid_json_string(&body, "request_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_request_id_required"}),
+        ));
+    };
+
+    let mut registry = lock_registry(state)?;
+    if approve {
+        match registry.approve_pairing_request(request_id, now_ms()) {
+            Ok(device) => Ok(ApiResponse::ok(json!({
+                "approved": true,
+                "device": device
+            }))),
+            Err(error) => pairing_registry_error(error),
+        }
+    } else {
+        match registry.deny_pairing_request(request_id, now_ms()) {
+            Ok(pairing_request) => Ok(ApiResponse::ok(json!({
+                "approved": false,
+                "request": pairing_request
+            }))),
+            Err(error) => pairing_registry_error(error),
+        }
+    }
+}
+
+fn revoke_paired_device(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+    let Some(device_id) = valid_json_string(&body, "device_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_id_required"}),
+        ));
+    };
+
+    let mut registry = lock_registry(state)?;
+    match registry.revoke_paired_device(device_id, now_ms()) {
+        Ok(device) => Ok(ApiResponse::ok(json!({
+            "revoked": true,
+            "device": device
+        }))),
+        Err(error) => pairing_registry_error(error),
+    }
+}
+
+fn pairing_registry_error(error: RegistryError) -> Result<ApiResponse, String> {
+    let response = match error {
+        RegistryError::PairingChallengeNotFound | RegistryError::PairingRequestNotFound
+        | RegistryError::PairedDeviceNotFound => {
+            ApiResponse::new(404, json!({"error": error.to_string()}))
+        }
+        RegistryError::InvalidPairingSecret => {
+            ApiResponse::new(401, json!({"error": error.to_string()}))
+        }
+        RegistryError::PairingChallengeExpired
+        | RegistryError::PairingChallengeConsumed
+        | RegistryError::PairingChallengeLocked
+        | RegistryError::PairingRequestNotPending => {
+            ApiResponse::new(409, json!({"error": error.to_string()}))
+        }
+        other => return Err(other.to_string()),
+    };
+    Ok(response)
+}
+
+fn valid_json_string<'a>(body: &'a Value, key: &str, max_len: usize) -> Option<&'a str> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= max_len)
+}
+
+fn random_hex(byte_len: usize) -> String {
+    let mut bytes = vec![0_u8; byte_len];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn sha256_hex(value: &str) -> String {
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn preview_response(query: &str, state: &DaemonState) -> Result<ApiResponse, String> {
