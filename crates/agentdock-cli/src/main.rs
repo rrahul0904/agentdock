@@ -15,6 +15,7 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("scan") => scan(&args[1..]),
         Some("daemon") => daemon(&args[1..]),
+        Some("pairing") => pairing(&args[1..]),
         Some("doctor") => doctor(),
         _ => help(),
     }
@@ -94,12 +95,12 @@ fn daemon(args: &[String]) {
     let addr = std::env::var("AGENTDOCK_ADDR").unwrap_or_else(|_| DEFAULT_DAEMON_ADDR.to_string());
 
     let path = match command {
-        "status" => "/v1/status",
-        "services" if include_all => "/v1/services?all=1",
-        "services" => "/v1/services",
-        "projects" => "/v1/projects",
-        "routes" => "/v1/routes",
-        "sessions" => "/v1/agent-sessions",
+        "status" => "/v1/status".to_string(),
+        "services" if include_all => "/v1/services?all=1".to_string(),
+        "services" => "/v1/services".to_string(),
+        "projects" => "/v1/projects".to_string(),
+        "routes" => "/v1/routes".to_string(),
+        "sessions" => "/v1/agent-sessions".to_string(),
         "session-logs" => {
             let Some(session_id) = args
                 .get(1)
@@ -110,12 +111,9 @@ fn daemon(args: &[String]) {
                 eprintln!("Use: agentdock daemon session-logs <session-id>");
                 std::process::exit(2);
             };
-            Box::leak(
-                format!("/v1/agent-session-logs?session_id={session_id}&limit=200")
-                    .into_boxed_str(),
-            )
+            format!("/v1/agent-session-logs?session_id={session_id}&limit=200")
         }
-        "events" => "/v1/events?limit=200",
+        "events" => "/v1/events?limit=200".to_string(),
         _ => {
             eprintln!("Unknown daemon command: {command}");
             eprintln!(
@@ -125,29 +123,118 @@ fn daemon(args: &[String]) {
         }
     };
 
-    match http_get(&addr, path) {
-        Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-            Ok(value) => println!(
-                "{}",
-                serde_json::to_string_pretty(&value).expect("serialize json")
-            ),
-            Err(_) => println!("{body}"),
-        },
-        Err(error) => {
-            eprintln!("Unable to reach AgentDock daemon at {addr}: {error}");
-            eprintln!("Start it with: cargo run -p agentdockd");
-            std::process::exit(1);
-        }
+    match http_get(&addr, &path) {
+        Ok(body) => print_response(&body),
+        Err(error) => daemon_error(&addr, &error),
     }
 }
 
+fn pairing(args: &[String]) {
+    let command = args.first().map(String::as_str).unwrap_or("requests");
+    let addr = std::env::var("AGENTDOCK_ADDR").unwrap_or_else(|_| DEFAULT_DAEMON_ADDR.to_string());
+    let include_all = args.iter().any(|arg| arg == "--all");
+
+    let result = match command {
+        "create" => http_post(&addr, "/v1/pairing/challenges", "{}"),
+        "requests" => {
+            let path = if include_all {
+                "/v1/pairing/requests?all=1"
+            } else {
+                "/v1/pairing/requests"
+            };
+            http_get(&addr, path)
+        }
+        "approve" | "deny" => {
+            let Some(request_id) = args.get(1).filter(|value| !value.is_empty()) else {
+                eprintln!("{command} requires a pairing request ID");
+                eprintln!("Use: agentdock pairing {command} <request-id>");
+                std::process::exit(2);
+            };
+            let body = serde_json::json!({"request_id": request_id}).to_string();
+            http_post(
+                &addr,
+                if command == "approve" {
+                    "/v1/pairing/requests/approve"
+                } else {
+                    "/v1/pairing/requests/deny"
+                },
+                &body,
+            )
+        }
+        "devices" => {
+            let path = if include_all {
+                "/v1/paired-devices?all=1"
+            } else {
+                "/v1/paired-devices"
+            };
+            http_get(&addr, path)
+        }
+        "revoke" => {
+            let Some(device_id) = args.get(1).filter(|value| !value.is_empty()) else {
+                eprintln!("revoke requires a paired device ID");
+                eprintln!("Use: agentdock pairing revoke <device-id>");
+                std::process::exit(2);
+            };
+            let body = serde_json::json!({"device_id": device_id}).to_string();
+            http_post(&addr, "/v1/paired-devices/revoke", &body)
+        }
+        _ => {
+            eprintln!("Unknown pairing command: {command}");
+            eprintln!(
+                "Use: agentdock pairing [create|requests|approve|deny|devices|revoke] [id] [--all]"
+            );
+            std::process::exit(2);
+        }
+    };
+
+    match result {
+        Ok(body) => print_response(&body),
+        Err(error) => daemon_error(&addr, &error),
+    }
+}
+
+fn print_response(body: &str) {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(value) => println!(
+            "{}",
+            serde_json::to_string_pretty(&value).expect("serialize json")
+        ),
+        Err(_) => println!("{body}"),
+    }
+}
+
+fn daemon_error(addr: &str, error: &str) -> ! {
+    eprintln!("Unable to reach AgentDock daemon at {addr}: {error}");
+    eprintln!("Start it with: cargo run -p agentdockd");
+    std::process::exit(1);
+}
+
 fn http_get(addr: &str, path: &str) -> Result<String, String> {
+    http_request(addr, "GET", path, None)
+}
+
+fn http_post(addr: &str, path: &str, body: &str) -> Result<String, String> {
+    http_request(addr, "POST", path, Some(body))
+}
+
+fn http_request(
+    addr: &str,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+) -> Result<String, String> {
     let mut stream = TcpStream::connect(addr).map_err(|error| error.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| error.to_string())?;
 
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    let request = match body {
+        Some(body) => format!(
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+        None => format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+    };
     stream
         .write_all(request.as_bytes())
         .map_err(|error| error.to_string())?;
@@ -161,7 +248,12 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
         .ok_or_else(|| "invalid HTTP response".to_string())?;
 
     let status = headers.lines().next().unwrap_or_default();
-    if !status.contains(" 200 ") {
+    let status_code = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status_code) {
         return Err(format!("{status}: {body}"));
     }
     Ok(body.to_string())
@@ -251,5 +343,11 @@ fn help() {
     println!("  agentdock daemon sessions");
     println!("  agentdock daemon session-logs <session-id>");
     println!("  agentdock daemon events");
+    println!("  agentdock pairing create");
+    println!("  agentdock pairing requests [--all]");
+    println!("  agentdock pairing approve <request-id>");
+    println!("  agentdock pairing deny <request-id>");
+    println!("  agentdock pairing devices [--all]");
+    println!("  agentdock pairing revoke <device-id>");
     println!("  agentdock doctor");
 }
