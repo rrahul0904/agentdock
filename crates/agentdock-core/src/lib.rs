@@ -1,3 +1,5 @@
+pub mod remote;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
