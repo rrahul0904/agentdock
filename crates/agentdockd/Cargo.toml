@@ -18,3 +18,5 @@ process-discovery = { path = "../process-discovery" }
 project-resolver = { path = "../project-resolver" }
 framework-detection = { path = "../framework-detection" }
 serde_json.workspace = true
+rand.workspace = true
+sha2.workspace = true
