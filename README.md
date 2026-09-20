@@ -4,7 +4,7 @@ AgentDock is an AI local development control plane for projects, ports, processe
 
 ## Current status
 
-Phase 4 agent attribution + daemon-backed MCP baseline is implemented.
+Phase 4 agent attribution + daemon-backed MCP baseline is implemented. The AgentPort donor work now adds a fail-closed remote capability contract and durable coding-agent session inventory/logs; remote pairing, transport, and input remain disabled.
 
 AgentDock now includes:
 
@@ -20,6 +20,9 @@ AgentDock now includes:
 - loopback control API
 - owner-scoped port reservations
 - MCP TypeScript v2 server backed by the daemon
+- durable coding-agent sessions derived from attributed local agents
+- bounded lifecycle logs for coding-agent sessions
+- fail-closed remote capability discovery with pairing/approval requirements
 - Rust + MCP CI configuration
 
 ## Run locally
@@ -37,6 +40,8 @@ cargo run -p agentdock-cli -- daemon status
 cargo run -p agentdock-cli -- daemon services --all
 cargo run -p agentdock-cli -- daemon projects
 cargo run -p agentdock-cli -- daemon routes
+cargo run -p agentdock-cli -- daemon sessions
+cargo run -p agentdock-cli -- daemon session-logs <session-id>
 cargo run -p agentdock-cli -- daemon events
 ~~~
 
@@ -90,6 +95,8 @@ Implemented MCP tools:
 - list_services
 - get_project
 - list_routes
+- list_agent_sessions
+- get_agent_session_logs
 - reserve_port
 - release_port
 - get_preview_url
@@ -100,6 +107,8 @@ Every MCP process receives its own owner token unless AGENTDOCK_SESSION_ID is ex
 ## Safety boundary
 
 AgentDock does not expose arbitrary shell execution or generic process-kill tools.
+
+The remote capability contract is discoverable locally, but remote control is disabled until authenticated device pairing and revocation exist. Every remote capability requires pairing, and every mutating remote capability also requires explicit approval.
 
 cleanup_orphans can inventory orphaned services, but destructive cleanup remains disabled until process/session ownership can be proved reliably.
 
@@ -132,7 +141,7 @@ packages/
 
 ## Next
 
-The next implementation wave is deeper ownership/lifecycle tracking: durable agent sessions, Git worktree/branch topology, log capture, health checks, and only then bounded process cleanup.
+The next AgentPort donor wave is authenticated local device pairing and revocation, followed by an authenticated bidirectional transport. Remote agent input remains blocked until those trust boundaries and parameter-bound approvals are implemented. In parallel, AgentDock still needs deeper Git worktree/branch topology, richer log capture, health checks, and only then bounded process cleanup.
 
 ## License
 
