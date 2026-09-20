@@ -70,13 +70,21 @@ mod tests {
     }
 
     #[test]
-    fn capability_contract_does_not_include_generic_shell_or_process_control() {
-        let serialized =
-            serde_json::to_string(&remote_capabilities()).expect("serialize capabilities");
+    fn capability_contract_is_intentionally_narrow() {
+        let capabilities = remote_capabilities();
 
-        assert!(!serialized.contains("shell"));
-        assert!(!serialized.contains("process"));
-        assert!(!serialized.contains("kill"));
-        assert!(!serialized.contains("command"));
+        assert_eq!(capabilities.len(), 4);
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|descriptor| descriptor.capability)
+                .collect::<Vec<_>>(),
+            vec![
+                RemoteCapability::SessionInventory,
+                RemoteCapability::SessionLogs,
+                RemoteCapability::AgentInput,
+                RemoteCapability::ActionApproval,
+            ]
+        );
     }
 }
