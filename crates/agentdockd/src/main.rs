@@ -4,13 +4,13 @@ use agent_attribution::enrich_agent;
 use agentdock_core::{remote::remote_capabilities, Service};
 use agentdock_proxy::{ProxyTarget, TargetResolver};
 use agentdock_registry::{now_ms, Registry, RegistryError, ServiceRecord};
-use rand::RngCore;
-use sha2::{Digest, Sha256};
 use framework_detection::enrich_service;
 use port_manager::PortManager;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
 use project_resolver::resolve_project;
+use rand::RngCore;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -467,12 +467,7 @@ fn create_pairing_challenge(state: &DaemonState) -> Result<ApiResponse, String> 
 
     let mut registry = lock_registry(state)?;
     let challenge = registry
-        .create_pairing_challenge(
-            &challenge_id,
-            &secret_hash,
-            created_at_ms,
-            expires_at_ms,
-        )
+        .create_pairing_challenge(&challenge_id, &secret_hash, created_at_ms, expires_at_ms)
         .map_err(|error| error.to_string())?;
 
     Ok(ApiResponse::new(
@@ -618,7 +613,8 @@ fn revoke_paired_device(
 
 fn pairing_registry_error(error: RegistryError) -> Result<ApiResponse, String> {
     let response = match error {
-        RegistryError::PairingChallengeNotFound | RegistryError::PairingRequestNotFound
+        RegistryError::PairingChallengeNotFound
+        | RegistryError::PairingRequestNotFound
         | RegistryError::PairedDeviceNotFound => {
             ApiResponse::new(404, json!({"error": error.to_string()}))
         }
