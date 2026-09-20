@@ -101,7 +101,10 @@ fn daemon(args: &[String]) {
         "routes" => "/v1/routes",
         "sessions" => "/v1/agent-sessions",
         "session-logs" => {
-            let Some(session_id) = args.get(1).map(String::as_str).filter(|value| !value.is_empty())
+            let Some(session_id) = args
+                .get(1)
+                .map(String::as_str)
+                .filter(|value| !value.is_empty())
             else {
                 eprintln!("session-logs requires a session ID");
                 eprintln!("Use: agentdock daemon session-logs <session-id>");
