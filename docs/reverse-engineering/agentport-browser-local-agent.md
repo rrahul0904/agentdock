@@ -100,6 +100,19 @@ AgentDock remote gateway
 
 A relay may be introduced later, but the relay must not become the authority for local execution. AgentDock remains the local policy and ownership boundary.
 
+## Implementation status
+
+Repository state on this branch:
+
+- Slice A — implemented: fail-closed remote capability contract and local discovery endpoint.
+- Slice B — implemented: durable coding-agent sessions, lifecycle state, bounded durable lifecycle logs, local API/CLI/MCP read paths.
+- Slice C — implemented at the local trust boundary: short-lived one-time pairing challenges, hash-only secret persistence, invalid-secret lockout, pending requests, explicit loopback-only approve/deny, durable paired devices, revocation, and audit events.
+- Slice D — not implemented: no remote relay or bidirectional transport is enabled.
+- Slice E — not implemented: no remote agent-input adapter or remote approval execution path is enabled.
+- Slice F — not implemented: no hosted browser control UI is claimed.
+
+Pairing administration intentionally remains outside the MCP tool surface so a coding agent cannot approve or revoke its own remote access.
+
 ## Smallest implementation sequence
 
 ### Slice A — capability and fail-closed API contract
