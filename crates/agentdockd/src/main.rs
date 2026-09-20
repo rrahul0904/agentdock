@@ -58,12 +58,11 @@ impl ApiResponse {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let bind = value_after(&args, "--bind")
-        .unwrap_or_else(|| DEFAULT_BIND.to_string());
+    let bind = value_after(&args, "--bind").unwrap_or_else(|| DEFAULT_BIND.to_string());
     let bind_addr = parse_bind(&bind, &args)?;
 
-    let proxy_bind = value_after(&args, "--proxy-bind")
-        .unwrap_or_else(|| DEFAULT_PROXY_BIND.to_string());
+    let proxy_bind =
+        value_after(&args, "--proxy-bind").unwrap_or_else(|| DEFAULT_PROXY_BIND.to_string());
     let proxy_bind_addr = parse_bind(&proxy_bind, &args)?;
 
     let interval_ms = value_after(&args, "--interval-ms")
@@ -82,16 +81,12 @@ fn run() -> Result<(), String> {
         .map(PathBuf::from)
         .unwrap_or_else(default_db_path);
 
-    if let Some(parent) = db_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-    {
+    if let Some(parent) = db_path.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
 
-    let mut registry = Registry::open(&db_path)
-        .map_err(|error| error.to_string())?;
+    let mut registry = Registry::open(&db_path).map_err(|error| error.to_string())?;
     registry.set_orphan_after_ms(orphan_after_ms);
 
     let registry = Arc::new(Mutex::new(registry));
@@ -194,9 +189,7 @@ fn service_socket(record: &ServiceRecord) -> Result<SocketAddr, String> {
 
     let ip = match address {
         "*" | "0.0.0.0" | "localhost" => IpAddr::from([127, 0, 0, 1]),
-        "::" => "::1"
-            .parse::<IpAddr>()
-            .map_err(|error| error.to_string())?,
+        "::" => "::1".parse::<IpAddr>().map_err(|error| error.to_string())?,
         value => value
             .parse::<IpAddr>()
             .map_err(|error| format!("unsupported service bind address {value}: {error}"))?,
@@ -205,10 +198,7 @@ fn service_socket(record: &ServiceRecord) -> Result<SocketAddr, String> {
     Ok(SocketAddr::new(ip, record.service.port))
 }
 
-fn reconcile_once(
-    registry: &Arc<Mutex<Registry>>,
-    include_udp: bool,
-) -> Result<(), String> {
+fn reconcile_once(registry: &Arc<Mutex<Registry>>, include_udp: bool) -> Result<(), String> {
     let services = discover_services(include_udp)?;
 
     let mut registry = registry
@@ -235,9 +225,7 @@ fn reconcile_once(
 
 fn discover_services(include_udp: bool) -> Result<Vec<Service>, String> {
     let discovery = NativeDiscovery::new(DiscoveryOptions { include_udp });
-    let mut services = discovery
-        .scan()
-        .map_err(|error| error.to_string())?;
+    let mut services = discovery.scan().map_err(|error| error.to_string())?;
 
     for service in &mut services {
         if let Some(cwd) = service.working_directory.as_deref() {
@@ -251,31 +239,19 @@ fn discover_services(include_udp: bool) -> Result<Vec<Service>, String> {
     Ok(services)
 }
 
-fn handle_client(
-    mut stream: TcpStream,
-    state: &DaemonState,
-) -> Result<(), String> {
+fn handle_client(mut stream: TcpStream, state: &DaemonState) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| error.to_string())?;
 
-    let request = http::read_request(&mut stream)
-        .map_err(|error| error.to_string())?;
+    let request = http::read_request(&mut stream).map_err(|error| error.to_string())?;
 
     let response = route_api(&request, state)?;
 
-    http::write_json(
-        &mut stream,
-        response.status,
-        response.body,
-    )
-    .map_err(|error| error.to_string())
+    http::write_json(&mut stream, response.status, response.body).map_err(|error| error.to_string())
 }
 
-fn route_api(
-    request: &http::HttpRequest,
-    state: &DaemonState,
-) -> Result<ApiResponse, String> {
+fn route_api(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResponse, String> {
     let (path, query) = split_target(&request.target);
 
     match (request.method.as_str(), path) {
@@ -286,9 +262,7 @@ fn route_api(
 
         ("GET", "/v1/status") => {
             let registry = lock_registry(state)?;
-            let status = registry
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = registry.status().map_err(|error| error.to_string())?;
 
             Ok(ApiResponse::ok(json!({
                 "daemon": {
@@ -328,28 +302,24 @@ fn route_api(
 
         ("GET", "/v1/routes") => {
             let registry = lock_registry(state)?;
-            let routes = registry
-                .list_routes()
-                .map_err(|error| error.to_string())?;
+            let routes = registry.list_routes().map_err(|error| error.to_string())?;
 
             Ok(ApiResponse::ok(json!({
                 "routes": routes
             })))
         }
 
-        ("GET", "/v1/remote/capabilities") => {
-            Ok(ApiResponse::ok(json!({
-                "enabled": false,
-                "transport": "not_configured",
-                "pairing": "not_implemented",
-                "capabilities": remote_capabilities(),
-                "safety": {
-                    "generic_shell": false,
-                    "generic_process_control": false,
-                    "daemon_default_bind": DEFAULT_BIND
-                }
-            })))
-        }
+        ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
+            "enabled": false,
+            "transport": "not_configured",
+            "pairing": "not_implemented",
+            "capabilities": remote_capabilities(),
+            "safety": {
+                "generic_shell": false,
+                "generic_process_control": false,
+                "daemon_default_bind": DEFAULT_BIND
+            }
+        }))),
 
         ("GET", "/v1/events") => {
             let after = query_value(query, "after")
@@ -376,10 +346,7 @@ fn route_api(
 
         ("POST", "/v1/ports/release") => release_port(request, state),
 
-        ("GET" | "POST", _) => Ok(ApiResponse::new(
-            404,
-            json!({"error": "not_found"}),
-        )),
+        ("GET" | "POST", _) => Ok(ApiResponse::new(404, json!({"error": "not_found"}))),
 
         _ => Ok(ApiResponse::new(
             405,
@@ -388,10 +355,7 @@ fn route_api(
     }
 }
 
-fn preview_response(
-    query: &str,
-    state: &DaemonState,
-) -> Result<ApiResponse, String> {
+fn preview_response(query: &str, state: &DaemonState) -> Result<ApiResponse, String> {
     if !state.proxy.enabled {
         return Ok(ApiResponse::new(
             503,
@@ -450,10 +414,7 @@ fn preview_response(
     })))
 }
 
-fn reserve_port(
-    request: &http::HttpRequest,
-    state: &DaemonState,
-) -> Result<ApiResponse, String> {
+fn reserve_port(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResponse, String> {
     let body = match parse_json_body(request) {
         Ok(body) => body,
         Err(error) => {
@@ -505,10 +466,7 @@ fn reserve_port(
     ))
 }
 
-fn release_port(
-    request: &http::HttpRequest,
-    state: &DaemonState,
-) -> Result<ApiResponse, String> {
+fn release_port(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResponse, String> {
     let body = match parse_json_body(request) {
         Ok(body) => body,
         Err(error) => {
@@ -570,33 +528,23 @@ fn release_port(
     })))
 }
 
-fn parse_json_body(
-    request: &http::HttpRequest,
-) -> Result<Value, String> {
-    serde_json::from_slice(&request.body)
-        .map_err(|error| format!("invalid JSON body: {error}"))
+fn parse_json_body(request: &http::HttpRequest) -> Result<Value, String> {
+    serde_json::from_slice(&request.body).map_err(|error| format!("invalid JSON body: {error}"))
 }
 
-fn lock_registry(
-    state: &DaemonState,
-) -> Result<std::sync::MutexGuard<'_, Registry>, String> {
+fn lock_registry(state: &DaemonState) -> Result<std::sync::MutexGuard<'_, Registry>, String> {
     state
         .registry
         .lock()
         .map_err(|_| "registry mutex poisoned".to_string())
 }
 
-fn parse_bind(
-    value: &str,
-    args: &[String],
-) -> Result<SocketAddr, String> {
+fn parse_bind(value: &str, args: &[String]) -> Result<SocketAddr, String> {
     let address: SocketAddr = value
         .parse()
         .map_err(|error| format!("invalid bind address {value}: {error}"))?;
 
-    let allow_non_loopback = args
-        .iter()
-        .any(|arg| arg == "--allow-non-loopback");
+    let allow_non_loopback = args.iter().any(|arg| arg == "--allow-non-loopback");
 
     if !address.ip().is_loopback() && !allow_non_loopback {
         return Err(format!(
@@ -608,36 +556,23 @@ fn parse_bind(
 }
 
 fn split_target(target: &str) -> (&str, &str) {
-    target
-        .split_once('?')
-        .unwrap_or((target, ""))
+    target.split_once('?').unwrap_or((target, ""))
 }
 
-fn query_flag(
-    query: &str,
-    key: &str,
-) -> bool {
+fn query_flag(query: &str, key: &str) -> bool {
     query_value(query, key)
         .map(|value| matches!(value, "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-fn query_value<'a>(
-    query: &'a str,
-    key: &str,
-) -> Option<&'a str> {
-    query
-        .split('&')
-        .find_map(|pair| {
-            let (candidate, value) = pair.split_once('=')?;
-            (candidate == key).then_some(value)
-        })
+fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|pair| {
+        let (candidate, value) = pair.split_once('=')?;
+        (candidate == key).then_some(value)
+    })
 }
 
-fn value_after(
-    args: &[String],
-    flag: &str,
-) -> Option<String> {
+fn value_after(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|arg| arg == flag)
         .and_then(|index| args.get(index + 1))
@@ -646,8 +581,7 @@ fn value_after(
 
 fn default_db_path() -> PathBuf {
     if let Ok(home) = std::env::var("AGENTDOCK_HOME") {
-        return PathBuf::from(home)
-            .join("agentdock.db");
+        return PathBuf::from(home).join("agentdock.db");
     }
 
     let base = std::env::var_os("HOME")
@@ -655,8 +589,7 @@ fn default_db_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    base.join(".agentdock")
-        .join("agentdock.db")
+    base.join(".agentdock").join("agentdock.db")
 }
 
 #[cfg(test)]
@@ -665,19 +598,11 @@ mod tests {
 
     #[test]
     fn parses_event_query() {
-        let (_, query) = split_target(
-            "/v1/events?after=12&limit=50"
-        );
+        let (_, query) = split_target("/v1/events?after=12&limit=50");
 
-        assert_eq!(
-            query_value(query, "after"),
-            Some("12")
-        );
+        assert_eq!(query_value(query, "after"), Some("12"));
 
-        assert_eq!(
-            query_value(query, "limit"),
-            Some("50")
-        );
+        assert_eq!(query_value(query, "limit"), Some("50"));
     }
 
     #[test]
@@ -707,9 +632,7 @@ mod tests {
 
         assert_eq!(
             service_socket(&service).unwrap(),
-            "127.0.0.1:3000"
-                .parse::<SocketAddr>()
-                .unwrap()
+            "127.0.0.1:3000".parse::<SocketAddr>().unwrap()
         );
     }
 }
