@@ -1910,9 +1910,7 @@ mod tests {
         assert!(device.revoked_at_ms.is_none());
         assert_eq!(registry.list_paired_devices(false).unwrap().len(), 1);
 
-        let revoked = registry
-            .revoke_paired_device(&device.id, 4_000)
-            .unwrap();
+        let revoked = registry.revoke_paired_device(&device.id, 4_000).unwrap();
         assert_eq!(revoked.revoked_at_ms, Some(4_000));
         assert!(registry.list_paired_devices(false).unwrap().is_empty());
         assert_eq!(registry.list_paired_devices(true).unwrap().len(), 1);
@@ -1939,13 +1937,8 @@ mod tests {
         }
 
         assert!(matches!(
-            registry.submit_pairing_request(
-                "pc_lock",
-                "hash-bad",
-                "Untrusted",
-                "key-final",
-                2_100,
-            ),
+            registry
+                .submit_pairing_request("pc_lock", "hash-bad", "Untrusted", "key-final", 2_100,),
             Err(RegistryError::PairingChallengeLocked)
         ));
     }
