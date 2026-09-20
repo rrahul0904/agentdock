@@ -1,7 +1,7 @@
 mod http;
 
 use agent_attribution::enrich_agent;
-use agentdock_core::Service;
+use agentdock_core::{remote::remote_capabilities, Service};
 use agentdock_proxy::{ProxyTarget, TargetResolver};
 use agentdock_registry::{now_ms, Registry, ServiceRecord};
 use framework_detection::enrich_service;
@@ -334,6 +334,20 @@ fn route_api(
 
             Ok(ApiResponse::ok(json!({
                 "routes": routes
+            })))
+        }
+
+        ("GET", "/v1/remote/capabilities") => {
+            Ok(ApiResponse::ok(json!({
+                "enabled": false,
+                "transport": "not_configured",
+                "pairing": "not_implemented",
+                "capabilities": remote_capabilities(),
+                "safety": {
+                    "generic_shell": false,
+                    "generic_process_control": false,
+                    "daemon_default_bind": DEFAULT_BIND
+                }
             })))
         }
 
