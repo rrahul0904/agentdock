@@ -41,7 +41,10 @@ fn scan(args: &[String]) {
             }
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&services).expect("serialize services"));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&services).expect("serialize services")
+                );
                 return;
             }
 
@@ -57,8 +60,15 @@ fn scan(args: &[String]) {
             );
 
             for service in services {
-                let pid = service.pid.map(|pid| pid.to_string()).unwrap_or_else(|| "-".into());
-                let project = service.project.as_ref().map(|p| p.name.as_str()).unwrap_or("-");
+                let pid = service
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "-".into());
+                let project = service
+                    .project
+                    .as_ref()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("-");
                 let hostname = service.stable_hostname().unwrap_or_else(|| "-".into());
                 println!(
                     "{:<8} {:<7} {:<16} {:<14} {:<24} {}",
@@ -99,7 +109,10 @@ fn daemon(args: &[String]) {
 
     match http_get(&addr, path) {
         Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-            Ok(value) => println!("{}", serde_json::to_string_pretty(&value).expect("serialize json")),
+            Ok(value) => println!(
+                "{}",
+                serde_json::to_string_pretty(&value).expect("serialize json")
+            ),
             Err(_) => println!("{body}"),
         },
         Err(error) => {
@@ -117,10 +130,14 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())?;
 
     let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(|error| error.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| error.to_string())?;
 
     let mut response = String::new();
-    stream.read_to_string(&mut response).map_err(|error| error.to_string())?;
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
     let (headers, body) = response
         .split_once("\r\n\r\n")
         .ok_or_else(|| "invalid HTTP response".to_string())?;
@@ -148,20 +165,60 @@ fn doctor() {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        println!("  lsof: {}", if std::process::Command::new("lsof").arg("-v").output().is_ok() { "available" } else { "missing" });
-        println!("  ps: {}", if std::process::Command::new("ps").arg("--help").output().is_ok() { "available" } else { "missing" });
+        println!(
+            "  lsof: {}",
+            if std::process::Command::new("lsof")
+                .arg("-v")
+                .output()
+                .is_ok()
+            {
+                "available"
+            } else {
+                "missing"
+            }
+        );
+        println!(
+            "  ps: {}",
+            if std::process::Command::new("ps")
+                .arg("--help")
+                .output()
+                .is_ok()
+            {
+                "available"
+            } else {
+                "missing"
+            }
+        );
     }
 
     #[cfg(target_os = "windows")]
     {
         let powershell = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "$PSVersionTable.PSVersion.ToString()",
+            ])
             .output();
-        println!("  powershell: {}", if powershell.is_ok() { "available" } else { "missing" });
+        println!(
+            "  powershell: {}",
+            if powershell.is_ok() {
+                "available"
+            } else {
+                "missing"
+            }
+        );
     }
 
     let addr = std::env::var("AGENTDOCK_ADDR").unwrap_or_else(|_| DEFAULT_DAEMON_ADDR.into());
-    println!("  daemon: {}", if http_get(&addr, "/healthz").is_ok() { "reachable" } else { "not running" });
+    println!(
+        "  daemon: {}",
+        if http_get(&addr, "/healthz").is_ok() {
+            "reachable"
+        } else {
+            "not running"
+        }
+    );
 }
 
 fn help() {
