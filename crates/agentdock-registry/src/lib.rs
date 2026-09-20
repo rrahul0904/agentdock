@@ -1,5 +1,6 @@
 use agentdock_core::{
-    slugify, LifecycleState, ProjectIdentity, Protocol, Service, ServiceClassification,
+    slugify, AgentIdentity, AgentKind, LifecycleState, ProjectIdentity, Protocol, Service,
+    ServiceClassification,
 };
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
 
 #[derive(Debug, Error)]
@@ -41,6 +42,27 @@ pub struct ServiceRecord {
     pub first_seen_ms: i64,
     pub last_seen_ms: i64,
     pub missing_since_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionRecord {
+    pub id: String,
+    pub service_id: String,
+    pub project_id: Option<String>,
+    pub agent: AgentIdentity,
+    pub state: LifecycleState,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+    pub missing_since_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSessionLogRecord {
+    pub seq: i64,
+    pub session_id: String,
+    pub level: String,
+    pub message: String,
+    pub created_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,6 +105,8 @@ pub struct RegistryStatus {
     pub schema_version: i64,
     pub projects: usize,
     pub services: usize,
+    pub agent_sessions: usize,
+    pub agent_session_logs: usize,
     pub routes: usize,
     pub active: usize,
     pub stale: usize,
@@ -159,6 +183,38 @@ impl Registry {
              CREATE INDEX IF NOT EXISTS idx_services_project_id
              ON services(project_id);
 
+             CREATE TABLE IF NOT EXISTS agent_sessions (
+                id TEXT PRIMARY KEY,
+                identity_key TEXT NOT NULL UNIQUE,
+                service_id TEXT NOT NULL,
+                project_id TEXT,
+                agent_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                first_seen_ms INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL,
+                missing_since_ms INTEGER,
+                FOREIGN KEY(service_id) REFERENCES services(id),
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_agent_sessions_state
+             ON agent_sessions(state);
+
+             CREATE INDEX IF NOT EXISTS idx_agent_sessions_project_id
+             ON agent_sessions(project_id);
+
+             CREATE TABLE IF NOT EXISTS agent_session_logs (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                level TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES agent_sessions(id)
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_agent_session_logs_session_seq
+             ON agent_session_logs(session_id, seq);
+
              CREATE TABLE IF NOT EXISTS routes (
                 hostname TEXT PRIMARY KEY COLLATE NOCASE,
                 project_id TEXT NOT NULL,
@@ -213,6 +269,7 @@ impl Registry {
         let tx = self.conn.transaction()?;
         let mut summary = ReconcileSummary::default();
         let mut seen_service_ids = HashSet::new();
+        let mut seen_agent_session_ids = HashSet::new();
 
         for service in services {
             let project_id = match service.project.as_ref() {
@@ -283,6 +340,87 @@ impl Registry {
                 }
             }
 
+            if let Some(agent) = service.agent.as_ref() {
+                let identity_key = agent_session_identity_key(&service_id, agent);
+                let session_id = stable_id("ags", &identity_key);
+                let previous_state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM agent_sessions WHERE id = ?1",
+                        params![session_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let agent_json = serde_json::to_string(agent)?;
+
+                tx.execute(
+                    "INSERT INTO agent_sessions(
+                        id,
+                        identity_key,
+                        service_id,
+                        project_id,
+                        agent_json,
+                        state,
+                        first_seen_ms,
+                        last_seen_ms,
+                        missing_since_ms
+                     )
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6, NULL)
+                     ON CONFLICT(id) DO UPDATE SET
+                        service_id = excluded.service_id,
+                        project_id = excluded.project_id,
+                        agent_json = excluded.agent_json,
+                        state = 'active',
+                        last_seen_ms = excluded.last_seen_ms,
+                        missing_since_ms = NULL",
+                    params![
+                        session_id,
+                        identity_key,
+                        service_id,
+                        project_id,
+                        agent_json,
+                        observed_at_ms
+                    ],
+                )?;
+
+                match previous_state.as_deref() {
+                    None => {
+                        insert_agent_session_event(
+                            &tx,
+                            "agent_session.discovered",
+                            &session_id,
+                            serde_json::json!({"service_id": service_id}),
+                            observed_at_ms,
+                        )?;
+                        insert_agent_session_log(
+                            &tx,
+                            &session_id,
+                            "info",
+                            "Agent session discovered",
+                            observed_at_ms,
+                        )?;
+                    }
+                    Some("active") => {}
+                    Some(_) => {
+                        insert_agent_session_event(
+                            &tx,
+                            "agent_session.resumed",
+                            &session_id,
+                            serde_json::json!({"service_id": service_id}),
+                            observed_at_ms,
+                        )?;
+                        insert_agent_session_log(
+                            &tx,
+                            &session_id,
+                            "info",
+                            "Agent session resumed",
+                            observed_at_ms,
+                        )?;
+                    }
+                }
+
+                seen_agent_session_ids.insert(session_id);
+            }
+
             seen_service_ids.insert(service_id);
         }
 
@@ -343,6 +481,87 @@ impl Registry {
                                 "service.orphaned",
                                 &service_id,
                                 serde_json::json!({"missing_since_ms": missing_since}),
+                                observed_at_ms,
+                            )?;
+                        }
+                    }
+                }
+                "orphaned" => {}
+                other => {
+                    return Err(RegistryError::InvalidLifecycle(other.to_string()));
+                }
+            }
+        }
+
+        let existing_agent_sessions = {
+            let mut stmt = tx.prepare(
+                "SELECT id, state, missing_since_ms
+                 FROM agent_sessions",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })?;
+
+            let mut values = Vec::new();
+            for row in rows {
+                values.push(row?);
+            }
+            values
+        };
+
+        for (session_id, state, missing_since_ms) in existing_agent_sessions {
+            if seen_agent_session_ids.contains(&session_id) {
+                continue;
+            }
+
+            match state.as_str() {
+                "active" => {
+                    tx.execute(
+                        "UPDATE agent_sessions
+                         SET state = 'stale', missing_since_ms = ?2
+                         WHERE id = ?1",
+                        params![session_id, observed_at_ms],
+                    )?;
+                    insert_agent_session_event(
+                        &tx,
+                        "agent_session.stale",
+                        &session_id,
+                        serde_json::json!({}),
+                        observed_at_ms,
+                    )?;
+                    insert_agent_session_log(
+                        &tx,
+                        &session_id,
+                        "info",
+                        "Agent session became stale",
+                        observed_at_ms,
+                    )?;
+                }
+                "stale" => {
+                    if let Some(missing_since) = missing_since_ms {
+                        if observed_at_ms.saturating_sub(missing_since) >= orphan_after_ms {
+                            tx.execute(
+                                "UPDATE agent_sessions
+                                 SET state = 'orphaned'
+                                 WHERE id = ?1",
+                                params![session_id],
+                            )?;
+                            insert_agent_session_event(
+                                &tx,
+                                "agent_session.orphaned",
+                                &session_id,
+                                serde_json::json!({"missing_since_ms": missing_since}),
+                                observed_at_ms,
+                            )?;
+                            insert_agent_session_log(
+                                &tx,
+                                &session_id,
+                                "warn",
+                                "Agent session became orphaned",
                                 observed_at_ms,
                             )?;
                         }
@@ -465,6 +684,99 @@ impl Registry {
         }
 
         Ok(records)
+    }
+
+    pub fn list_agent_sessions(&self) -> Result<Vec<AgentSessionRecord>, RegistryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                id,
+                service_id,
+                project_id,
+                agent_json,
+                state,
+                first_seen_ms,
+                last_seen_ms,
+                missing_since_ms
+             FROM agent_sessions
+             ORDER BY last_seen_ms DESC, id ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+            ))
+        })?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            let (
+                id,
+                service_id,
+                project_id,
+                agent_json,
+                state_text,
+                first_seen_ms,
+                last_seen_ms,
+                missing_since_ms,
+            ) = row?;
+            let state = LifecycleState::parse(&state_text)
+                .ok_or_else(|| RegistryError::InvalidLifecycle(state_text.clone()))?;
+
+            sessions.push(AgentSessionRecord {
+                id,
+                service_id,
+                project_id,
+                agent: serde_json::from_str(&agent_json)?,
+                state,
+                first_seen_ms,
+                last_seen_ms,
+                missing_since_ms,
+            });
+        }
+
+        Ok(sessions)
+    }
+
+    pub fn list_agent_session_logs(
+        &self,
+        session_id: &str,
+        after_seq: i64,
+        limit: usize,
+    ) -> Result<Vec<AgentSessionLogRecord>, RegistryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, session_id, level, message, created_at_ms
+             FROM agent_session_logs
+             WHERE session_id = ?1
+               AND seq > ?2
+             ORDER BY seq ASC
+             LIMIT ?3",
+        )?;
+
+        let rows = stmt.query_map(
+            params![session_id, after_seq, limit.clamp(1, 500) as i64],
+            |row| {
+                Ok(AgentSessionLogRecord {
+                    seq: row.get(0)?,
+                    session_id: row.get(1)?,
+                    level: row.get(2)?,
+                    message: row.get(3)?,
+                    created_at_ms: row.get(4)?,
+                })
+            },
+        )?;
+
+        let mut logs = Vec::new();
+        for row in rows {
+            logs.push(row?);
+        }
+        Ok(logs)
     }
 
     pub fn list_routes(&self) -> Result<Vec<RouteRecord>, RegistryError> {
@@ -618,6 +930,9 @@ impl Registry {
     pub fn status(&self) -> Result<RegistryStatus, RegistryError> {
         let projects = scalar_count(&self.conn, "SELECT COUNT(*) FROM projects")?;
         let services = scalar_count(&self.conn, "SELECT COUNT(*) FROM services")?;
+        let agent_sessions = scalar_count(&self.conn, "SELECT COUNT(*) FROM agent_sessions")?;
+        let agent_session_logs =
+            scalar_count(&self.conn, "SELECT COUNT(*) FROM agent_session_logs")?;
         let routes = scalar_count(&self.conn, "SELECT COUNT(*) FROM routes")?;
         let events = scalar_count(&self.conn, "SELECT COUNT(*) FROM events")?;
         let (active, stale, orphaned) = state_counts_conn(&self.conn)?;
@@ -626,6 +941,8 @@ impl Registry {
             schema_version: SCHEMA_VERSION,
             projects,
             services,
+            agent_sessions,
+            agent_session_logs,
             routes,
             active,
             stale,
@@ -793,6 +1110,70 @@ fn service_identity_key(service: &Service, project_id: Option<&str>) -> String {
     }
 }
 
+fn agent_session_identity_key(service_id: &str, agent: &AgentIdentity) -> String {
+    let kind = match agent.kind {
+        AgentKind::Codex => "codex",
+        AgentKind::ClaudeCode => "claude-code",
+        AgentKind::Cursor => "cursor",
+        AgentKind::Gemini => "gemini",
+        AgentKind::Terminal => "terminal",
+        AgentKind::Unknown => "unknown",
+    };
+
+    match agent.session_id.as_deref() {
+        Some(session_id) => format!("kind={kind}|session={session_id}"),
+        None => format!("kind={kind}|service={service_id}"),
+    }
+}
+
+fn insert_agent_session_event(
+    tx: &Transaction<'_>,
+    kind: &str,
+    session_id: &str,
+    payload: serde_json::Value,
+    created_at_ms: i64,
+) -> Result<(), RegistryError> {
+    tx.execute(
+        "INSERT INTO events(
+            kind,
+            entity_type,
+            entity_id,
+            payload_json,
+            created_at_ms
+         )
+         VALUES (?1, 'agent_session', ?2, ?3, ?4)",
+        params![
+            kind,
+            session_id,
+            serde_json::to_string(&payload)?,
+            created_at_ms
+        ],
+    )?;
+
+    Ok(())
+}
+
+fn insert_agent_session_log(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    level: &str,
+    message: &str,
+    created_at_ms: i64,
+) -> Result<(), RegistryError> {
+    tx.execute(
+        "INSERT INTO agent_session_logs(
+            session_id,
+            level,
+            message,
+            created_at_ms
+         )
+         VALUES (?1, ?2, ?3, ?4)",
+        params![session_id, level, message, created_at_ms],
+    )?;
+
+    Ok(())
+}
+
 fn insert_event(
     tx: &Transaction<'_>,
     kind: &str,
@@ -890,7 +1271,7 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentdock_core::Framework;
+    use agentdock_core::{AgentKind, Framework};
     use std::path::PathBuf;
 
     fn service(project_name: &str, root: &str, port: u16) -> Service {
@@ -913,6 +1294,71 @@ mod tests {
             agent: None,
             classification: ServiceClassification::Development,
         }
+    }
+
+    fn agent_service(project_name: &str, root: &str, port: u16) -> Service {
+        let mut service = service(project_name, root, port);
+        service.agent = Some(AgentIdentity {
+            kind: AgentKind::Codex,
+            session_id: Some("codex:test-session".into()),
+        });
+        service
+    }
+
+    #[test]
+    fn durable_agent_session_tracks_lifecycle_and_logs() {
+        let mut registry = Registry::in_memory().unwrap();
+        registry.set_orphan_after_ms(1_000);
+
+        registry
+            .reconcile(
+                &[agent_service("storefront", "/tmp/storefront", 3000)],
+                1_000,
+            )
+            .unwrap();
+
+        let first = registry.list_agent_sessions().unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].state, LifecycleState::Active);
+        assert_eq!(first[0].agent.kind, AgentKind::Codex);
+        let session_id = first[0].id.clone();
+        assert_eq!(
+            registry
+                .list_agent_session_logs(&session_id, 0, 100)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        registry.reconcile(&[], 2_000).unwrap();
+        assert_eq!(
+            registry.list_agent_sessions().unwrap()[0].state,
+            LifecycleState::Stale
+        );
+
+        registry.reconcile(&[], 3_100).unwrap();
+        assert_eq!(
+            registry.list_agent_sessions().unwrap()[0].state,
+            LifecycleState::Orphaned
+        );
+
+        registry
+            .reconcile(
+                &[agent_service("storefront", "/tmp/storefront", 3010)],
+                4_000,
+            )
+            .unwrap();
+
+        let resumed = registry.list_agent_sessions().unwrap();
+        assert_eq!(resumed[0].id, session_id);
+        assert_eq!(resumed[0].state, LifecycleState::Active);
+        assert_eq!(
+            registry
+                .list_agent_session_logs(&session_id, 0, 100)
+                .unwrap()
+                .len(),
+            4
+        );
     }
 
     #[test]
