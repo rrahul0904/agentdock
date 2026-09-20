@@ -22,10 +22,7 @@ fn detect_agent_for_process(pid: u32) -> Option<AgentIdentity> {
 
         if let Some(kind) = detect_kind(&process.name, process.command_line.as_deref()) {
             return Some(AgentIdentity {
-                session_id: Some(format!(
-                    "{}:{current_pid}",
-                    kind_label(&kind)
-                )),
+                session_id: Some(format!("{}:{current_pid}", kind_label(&kind))),
                 kind,
             });
         }
@@ -93,8 +90,7 @@ fn inspect_process(pid: u32) -> Option<ProcessInfo> {
         return None;
     }
 
-    let value: serde_json::Value =
-        serde_json::from_slice(&output.stdout).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
 
     Some(ProcessInfo {
         parent_pid: value
@@ -113,25 +109,13 @@ fn inspect_process(pid: u32) -> Option<ProcessInfo> {
     })
 }
 
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "linux",
-    target_os = "windows"
-)))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn inspect_process(_pid: u32) -> Option<ProcessInfo> {
     None
 }
 
-fn detect_kind(
-    name: &str,
-    command_line: Option<&str>,
-) -> Option<AgentKind> {
-    let text = format!(
-        "{} {}",
-        name,
-        command_line.unwrap_or_default()
-    )
-    .to_ascii_lowercase();
+fn detect_kind(name: &str, command_line: Option<&str>) -> Option<AgentKind> {
+    let text = format!("{} {}", name, command_line.unwrap_or_default()).to_ascii_lowercase();
 
     if contains_any(
         &text,
@@ -191,13 +175,8 @@ fn first_process_token(command_line: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn contains_any(
-    haystack: &str,
-    needles: &[&str],
-) -> bool {
-    needles
-        .iter()
-        .any(|needle| haystack.contains(needle))
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
 }
 
 fn kind_label(kind: &AgentKind) -> &'static str {
@@ -218,10 +197,7 @@ mod tests {
     #[test]
     fn detects_codex() {
         assert_eq!(
-            detect_kind(
-                "node",
-                Some("/usr/local/bin/codex app-server")
-            ),
+            detect_kind("node", Some("/usr/local/bin/codex app-server")),
             Some(AgentKind::Codex)
         );
     }
@@ -229,10 +205,7 @@ mod tests {
     #[test]
     fn detects_claude_code() {
         assert_eq!(
-            detect_kind(
-                "node",
-                Some("node @anthropic-ai/claude-code")
-            ),
+            detect_kind("node", Some("node @anthropic-ai/claude-code")),
             Some(AgentKind::ClaudeCode)
         );
     }
@@ -240,10 +213,7 @@ mod tests {
     #[test]
     fn detects_cursor_agent() {
         assert_eq!(
-            detect_kind(
-                "cursor-agent",
-                Some("cursor-agent --background")
-            ),
+            detect_kind("cursor-agent", Some("cursor-agent --background")),
             Some(AgentKind::Cursor)
         );
     }
@@ -251,10 +221,7 @@ mod tests {
     #[test]
     fn ignores_regular_node_process() {
         assert_eq!(
-            detect_kind(
-                "node",
-                Some("node node_modules/vite/bin/vite.js")
-            ),
+            detect_kind("node", Some("node node_modules/vite/bin/vite.js")),
             None
         );
     }
