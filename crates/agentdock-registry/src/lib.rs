@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
 
 #[derive(Debug, Error)]
@@ -22,6 +22,22 @@ pub enum RegistryError {
     InvalidLifecycle(String),
     #[error("invalid localhost alias: {0}")]
     InvalidHostname(String),
+    #[error("pairing challenge not found")]
+    PairingChallengeNotFound,
+    #[error("pairing challenge expired")]
+    PairingChallengeExpired,
+    #[error("pairing challenge already consumed")]
+    PairingChallengeConsumed,
+    #[error("pairing challenge locked after too many failed attempts")]
+    PairingChallengeLocked,
+    #[error("invalid pairing secret")]
+    InvalidPairingSecret,
+    #[error("pairing request not found")]
+    PairingRequestNotFound,
+    #[error("pairing request is not pending")]
+    PairingRequestNotPending,
+    #[error("paired device not found")]
+    PairedDeviceNotFound,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,6 +82,35 @@ pub struct AgentSessionLogRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingChallengeRecord {
+    pub id: String,
+    pub created_at_ms: i64,
+    pub expires_at_ms: i64,
+    pub consumed_at_ms: Option<i64>,
+    pub failed_attempts: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingRequestRecord {
+    pub id: String,
+    pub challenge_id: String,
+    pub device_name: String,
+    pub device_public_key: String,
+    pub status: String,
+    pub created_at_ms: i64,
+    pub decided_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairedDeviceRecord {
+    pub id: String,
+    pub name: String,
+    pub public_key: String,
+    pub created_at_ms: i64,
+    pub revoked_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RouteRecord {
     pub hostname: String,
     pub project_id: String,
@@ -107,6 +152,8 @@ pub struct RegistryStatus {
     pub services: usize,
     pub agent_sessions: usize,
     pub agent_session_logs: usize,
+    pub pairing_requests: usize,
+    pub paired_devices: usize,
     pub routes: usize,
     pub active: usize,
     pub stale: usize,
@@ -214,6 +261,40 @@ impl Registry {
 
              CREATE INDEX IF NOT EXISTS idx_agent_session_logs_session_seq
              ON agent_session_logs(session_id, seq);
+
+             CREATE TABLE IF NOT EXISTS pairing_challenges (
+                id TEXT PRIMARY KEY,
+                secret_hash TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                expires_at_ms INTEGER NOT NULL,
+                consumed_at_ms INTEGER,
+                failed_attempts INTEGER NOT NULL DEFAULT 0
+             );
+
+             CREATE TABLE IF NOT EXISTS pairing_requests (
+                id TEXT PRIMARY KEY,
+                challenge_id TEXT NOT NULL UNIQUE,
+                device_name TEXT NOT NULL,
+                device_public_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                decided_at_ms INTEGER,
+                FOREIGN KEY(challenge_id) REFERENCES pairing_challenges(id)
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_pairing_requests_status
+             ON pairing_requests(status);
+
+             CREATE TABLE IF NOT EXISTS paired_devices (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                public_key TEXT NOT NULL UNIQUE,
+                created_at_ms INTEGER NOT NULL,
+                revoked_at_ms INTEGER
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_paired_devices_revoked_at
+             ON paired_devices(revoked_at_ms);
 
              CREATE TABLE IF NOT EXISTS routes (
                 hostname TEXT PRIMARY KEY COLLATE NOCASE,
@@ -779,6 +860,393 @@ impl Registry {
         Ok(logs)
     }
 
+    pub fn create_pairing_challenge(
+        &mut self,
+        challenge_id: &str,
+        secret_hash: &str,
+        created_at_ms: i64,
+        expires_at_ms: i64,
+    ) -> Result<PairingChallengeRecord, RegistryError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO pairing_challenges(
+                id,
+                secret_hash,
+                created_at_ms,
+                expires_at_ms,
+                consumed_at_ms,
+                failed_attempts
+             )
+             VALUES (?1, ?2, ?3, ?4, NULL, 0)",
+            params![challenge_id, secret_hash, created_at_ms, expires_at_ms],
+        )?;
+        insert_typed_event(
+            &tx,
+            "pairing.challenge.created",
+            "pairing_challenge",
+            challenge_id,
+            serde_json::json!({"expires_at_ms": expires_at_ms}),
+            created_at_ms,
+        )?;
+        tx.commit()?;
+
+        Ok(PairingChallengeRecord {
+            id: challenge_id.to_string(),
+            created_at_ms,
+            expires_at_ms,
+            consumed_at_ms: None,
+            failed_attempts: 0,
+        })
+    }
+
+    pub fn submit_pairing_request(
+        &mut self,
+        challenge_id: &str,
+        candidate_secret_hash: &str,
+        device_name: &str,
+        device_public_key: &str,
+        requested_at_ms: i64,
+    ) -> Result<PairingRequestRecord, RegistryError> {
+        let tx = self.conn.transaction()?;
+        let challenge = tx
+            .query_row(
+                "SELECT secret_hash, expires_at_ms, consumed_at_ms, failed_attempts
+                 FROM pairing_challenges
+                 WHERE id = ?1",
+                params![challenge_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(RegistryError::PairingChallengeNotFound)?;
+
+        let (secret_hash, expires_at_ms, consumed_at_ms, failed_attempts) = challenge;
+        if consumed_at_ms.is_some() {
+            return Err(RegistryError::PairingChallengeConsumed);
+        }
+        if requested_at_ms > expires_at_ms {
+            return Err(RegistryError::PairingChallengeExpired);
+        }
+        if failed_attempts >= 5 {
+            return Err(RegistryError::PairingChallengeLocked);
+        }
+
+        if !constant_time_eq(secret_hash.as_bytes(), candidate_secret_hash.as_bytes()) {
+            let next_attempts = failed_attempts.saturating_add(1);
+            tx.execute(
+                "UPDATE pairing_challenges
+                 SET failed_attempts = ?2,
+                     consumed_at_ms = CASE WHEN ?2 >= 5 THEN ?3 ELSE consumed_at_ms END
+                 WHERE id = ?1",
+                params![challenge_id, next_attempts, requested_at_ms],
+            )?;
+            tx.commit()?;
+            return Err(if next_attempts >= 5 {
+                RegistryError::PairingChallengeLocked
+            } else {
+                RegistryError::InvalidPairingSecret
+            });
+        }
+
+        let request_id = stable_id(
+            "preq",
+            &format!("{challenge_id}|{device_public_key}|{requested_at_ms}"),
+        );
+        tx.execute(
+            "UPDATE pairing_challenges
+             SET consumed_at_ms = ?2
+             WHERE id = ?1",
+            params![challenge_id, requested_at_ms],
+        )?;
+        tx.execute(
+            "INSERT INTO pairing_requests(
+                id,
+                challenge_id,
+                device_name,
+                device_public_key,
+                status,
+                created_at_ms,
+                decided_at_ms
+             )
+             VALUES (?1, ?2, ?3, ?4, 'pending', ?5, NULL)",
+            params![
+                request_id,
+                challenge_id,
+                device_name,
+                device_public_key,
+                requested_at_ms
+            ],
+        )?;
+        insert_typed_event(
+            &tx,
+            "pairing.requested",
+            "pairing_request",
+            &request_id,
+            serde_json::json!({"device_name": device_name}),
+            requested_at_ms,
+        )?;
+        tx.commit()?;
+
+        Ok(PairingRequestRecord {
+            id: request_id,
+            challenge_id: challenge_id.to_string(),
+            device_name: device_name.to_string(),
+            device_public_key: device_public_key.to_string(),
+            status: "pending".to_string(),
+            created_at_ms: requested_at_ms,
+            decided_at_ms: None,
+        })
+    }
+
+    pub fn list_pairing_requests(
+        &self,
+        pending_only: bool,
+    ) -> Result<Vec<PairingRequestRecord>, RegistryError> {
+        let sql = if pending_only {
+            "SELECT id, challenge_id, device_name, device_public_key, status, created_at_ms, decided_at_ms
+             FROM pairing_requests
+             WHERE status = 'pending'
+             ORDER BY created_at_ms ASC, id ASC"
+        } else {
+            "SELECT id, challenge_id, device_name, device_public_key, status, created_at_ms, decided_at_ms
+             FROM pairing_requests
+             ORDER BY created_at_ms DESC, id ASC"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PairingRequestRecord {
+                id: row.get(0)?,
+                challenge_id: row.get(1)?,
+                device_name: row.get(2)?,
+                device_public_key: row.get(3)?,
+                status: row.get(4)?,
+                created_at_ms: row.get(5)?,
+                decided_at_ms: row.get(6)?,
+            })
+        })?;
+
+        let mut requests = Vec::new();
+        for row in rows {
+            requests.push(row?);
+        }
+        Ok(requests)
+    }
+
+    pub fn approve_pairing_request(
+        &mut self,
+        request_id: &str,
+        decided_at_ms: i64,
+    ) -> Result<PairedDeviceRecord, RegistryError> {
+        let tx = self.conn.transaction()?;
+        let request = tx
+            .query_row(
+                "SELECT device_name, device_public_key, status
+                 FROM pairing_requests
+                 WHERE id = ?1",
+                params![request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(RegistryError::PairingRequestNotFound)?;
+        let (device_name, device_public_key, status) = request;
+        if status != "pending" {
+            return Err(RegistryError::PairingRequestNotPending);
+        }
+
+        let device_id = stable_id("dev", &device_public_key);
+        tx.execute(
+            "INSERT INTO paired_devices(
+                id,
+                name,
+                public_key,
+                created_at_ms,
+                revoked_at_ms
+             )
+             VALUES (?1, ?2, ?3, ?4, NULL)
+             ON CONFLICT(public_key) DO UPDATE SET
+                name = excluded.name,
+                created_at_ms = excluded.created_at_ms,
+                revoked_at_ms = NULL",
+            params![device_id, device_name, device_public_key, decided_at_ms],
+        )?;
+        tx.execute(
+            "UPDATE pairing_requests
+             SET status = 'approved', decided_at_ms = ?2
+             WHERE id = ?1",
+            params![request_id, decided_at_ms],
+        )?;
+        insert_typed_event(
+            &tx,
+            "pairing.approved",
+            "paired_device",
+            &device_id,
+            serde_json::json!({"request_id": request_id}),
+            decided_at_ms,
+        )?;
+        tx.commit()?;
+
+        Ok(PairedDeviceRecord {
+            id: device_id,
+            name: device_name,
+            public_key: device_public_key,
+            created_at_ms: decided_at_ms,
+            revoked_at_ms: None,
+        })
+    }
+
+    pub fn deny_pairing_request(
+        &mut self,
+        request_id: &str,
+        decided_at_ms: i64,
+    ) -> Result<PairingRequestRecord, RegistryError> {
+        let tx = self.conn.transaction()?;
+        let request = tx
+            .query_row(
+                "SELECT challenge_id, device_name, device_public_key, status, created_at_ms
+                 FROM pairing_requests
+                 WHERE id = ?1",
+                params![request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(RegistryError::PairingRequestNotFound)?;
+        let (challenge_id, device_name, device_public_key, status, created_at_ms) = request;
+        if status != "pending" {
+            return Err(RegistryError::PairingRequestNotPending);
+        }
+
+        tx.execute(
+            "UPDATE pairing_requests
+             SET status = 'denied', decided_at_ms = ?2
+             WHERE id = ?1",
+            params![request_id, decided_at_ms],
+        )?;
+        insert_typed_event(
+            &tx,
+            "pairing.denied",
+            "pairing_request",
+            request_id,
+            serde_json::json!({}),
+            decided_at_ms,
+        )?;
+        tx.commit()?;
+
+        Ok(PairingRequestRecord {
+            id: request_id.to_string(),
+            challenge_id,
+            device_name,
+            device_public_key,
+            status: "denied".to_string(),
+            created_at_ms,
+            decided_at_ms: Some(decided_at_ms),
+        })
+    }
+
+    pub fn list_paired_devices(
+        &self,
+        include_revoked: bool,
+    ) -> Result<Vec<PairedDeviceRecord>, RegistryError> {
+        let sql = if include_revoked {
+            "SELECT id, name, public_key, created_at_ms, revoked_at_ms
+             FROM paired_devices
+             ORDER BY created_at_ms DESC, id ASC"
+        } else {
+            "SELECT id, name, public_key, created_at_ms, revoked_at_ms
+             FROM paired_devices
+             WHERE revoked_at_ms IS NULL
+             ORDER BY created_at_ms DESC, id ASC"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PairedDeviceRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                public_key: row.get(2)?,
+                created_at_ms: row.get(3)?,
+                revoked_at_ms: row.get(4)?,
+            })
+        })?;
+
+        let mut devices = Vec::new();
+        for row in rows {
+            devices.push(row?);
+        }
+        Ok(devices)
+    }
+
+    pub fn revoke_paired_device(
+        &mut self,
+        device_id: &str,
+        revoked_at_ms: i64,
+    ) -> Result<PairedDeviceRecord, RegistryError> {
+        let tx = self.conn.transaction()?;
+        let device = tx
+            .query_row(
+                "SELECT name, public_key, created_at_ms, revoked_at_ms
+                 FROM paired_devices
+                 WHERE id = ?1",
+                params![device_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(RegistryError::PairedDeviceNotFound)?;
+        let (name, public_key, created_at_ms, previous_revoked_at_ms) = device;
+        let effective_revoked_at_ms = previous_revoked_at_ms.unwrap_or(revoked_at_ms);
+
+        tx.execute(
+            "UPDATE paired_devices
+             SET revoked_at_ms = COALESCE(revoked_at_ms, ?2)
+             WHERE id = ?1",
+            params![device_id, revoked_at_ms],
+        )?;
+        if previous_revoked_at_ms.is_none() {
+            insert_typed_event(
+                &tx,
+                "pairing.device.revoked",
+                "paired_device",
+                device_id,
+                serde_json::json!({}),
+                revoked_at_ms,
+            )?;
+        }
+        tx.commit()?;
+
+        Ok(PairedDeviceRecord {
+            id: device_id.to_string(),
+            name,
+            public_key,
+            created_at_ms,
+            revoked_at_ms: Some(effective_revoked_at_ms),
+        })
+    }
+
     pub fn list_routes(&self) -> Result<Vec<RouteRecord>, RegistryError> {
         let mut stmt = self.conn.prepare(
             "SELECT hostname, project_id, is_canonical, created_at_ms
@@ -933,6 +1401,8 @@ impl Registry {
         let agent_sessions = scalar_count(&self.conn, "SELECT COUNT(*) FROM agent_sessions")?;
         let agent_session_logs =
             scalar_count(&self.conn, "SELECT COUNT(*) FROM agent_session_logs")?;
+        let pairing_requests = scalar_count(&self.conn, "SELECT COUNT(*) FROM pairing_requests")?;
+        let paired_devices = scalar_count(&self.conn, "SELECT COUNT(*) FROM paired_devices")?;
         let routes = scalar_count(&self.conn, "SELECT COUNT(*) FROM routes")?;
         let events = scalar_count(&self.conn, "SELECT COUNT(*) FROM events")?;
         let (active, stale, orphaned) = state_counts_conn(&self.conn)?;
@@ -943,6 +1413,8 @@ impl Registry {
             services,
             agent_sessions,
             agent_session_logs,
+            pairing_requests,
+            paired_devices,
             routes,
             active,
             stale,
@@ -1124,6 +1596,47 @@ fn agent_session_identity_key(service_id: &str, agent: &AgentIdentity) -> String
         Some(session_id) => format!("kind={kind}|session={session_id}"),
         None => format!("kind={kind}|service={service_id}"),
     }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let mut diff = 0_u8;
+    for (left, right) in left.iter().zip(right.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
+fn insert_typed_event(
+    tx: &Transaction<'_>,
+    kind: &str,
+    entity_type: &str,
+    entity_id: &str,
+    payload: serde_json::Value,
+    created_at_ms: i64,
+) -> Result<(), RegistryError> {
+    tx.execute(
+        "INSERT INTO events(
+            kind,
+            entity_type,
+            entity_id,
+            payload_json,
+            created_at_ms
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            kind,
+            entity_type,
+            entity_id,
+            serde_json::to_string(&payload)?,
+            created_at_ms
+        ],
+    )?;
+
+    Ok(())
 }
 
 fn insert_agent_session_event(
@@ -1359,6 +1872,82 @@ mod tests {
                 .len(),
             4
         );
+    }
+
+    #[test]
+    fn pairing_requires_valid_one_time_secret_and_local_approval() {
+        let mut registry = Registry::in_memory().unwrap();
+
+        registry
+            .create_pairing_challenge("pc_test", "hash-good", 1_000, 6_000)
+            .unwrap();
+
+        let request = registry
+            .submit_pairing_request(
+                "pc_test",
+                "hash-good",
+                "Rahul iPhone",
+                "device-public-key",
+                2_000,
+            )
+            .unwrap();
+        assert_eq!(request.status, "pending");
+
+        assert!(matches!(
+            registry.submit_pairing_request(
+                "pc_test",
+                "hash-good",
+                "Replay",
+                "other-public-key",
+                2_100,
+            ),
+            Err(RegistryError::PairingChallengeConsumed)
+        ));
+
+        let device = registry
+            .approve_pairing_request(&request.id, 3_000)
+            .unwrap();
+        assert!(device.revoked_at_ms.is_none());
+        assert_eq!(registry.list_paired_devices(false).unwrap().len(), 1);
+
+        let revoked = registry
+            .revoke_paired_device(&device.id, 4_000)
+            .unwrap();
+        assert_eq!(revoked.revoked_at_ms, Some(4_000));
+        assert!(registry.list_paired_devices(false).unwrap().is_empty());
+        assert_eq!(registry.list_paired_devices(true).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pairing_challenge_locks_after_repeated_invalid_secrets() {
+        let mut registry = Registry::in_memory().unwrap();
+        registry
+            .create_pairing_challenge("pc_lock", "hash-good", 1_000, 10_000)
+            .unwrap();
+
+        for attempt in 0..4 {
+            assert!(matches!(
+                registry.submit_pairing_request(
+                    "pc_lock",
+                    "hash-bad",
+                    "Untrusted",
+                    &format!("key-{attempt}"),
+                    2_000 + attempt,
+                ),
+                Err(RegistryError::InvalidPairingSecret)
+            ));
+        }
+
+        assert!(matches!(
+            registry.submit_pairing_request(
+                "pc_lock",
+                "hash-bad",
+                "Untrusted",
+                "key-final",
+                2_100,
+            ),
+            Err(RegistryError::PairingChallengeLocked)
+        ));
     }
 
     #[test]
