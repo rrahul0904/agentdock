@@ -99,10 +99,25 @@ fn daemon(args: &[String]) {
         "services" => "/v1/services",
         "projects" => "/v1/projects",
         "routes" => "/v1/routes",
+        "sessions" => "/v1/agent-sessions",
+        "session-logs" => {
+            let Some(session_id) = args.get(1).map(String::as_str).filter(|value| !value.is_empty())
+            else {
+                eprintln!("session-logs requires a session ID");
+                eprintln!("Use: agentdock daemon session-logs <session-id>");
+                std::process::exit(2);
+            };
+            Box::leak(
+                format!("/v1/agent-session-logs?session_id={session_id}&limit=200")
+                    .into_boxed_str(),
+            )
+        }
         "events" => "/v1/events?limit=200",
         _ => {
             eprintln!("Unknown daemon command: {command}");
-            eprintln!("Use: agentdock daemon [status|services|projects|routes|events] [--all]");
+            eprintln!(
+                "Use: agentdock daemon [status|services|projects|routes|sessions|session-logs|events] [--all]"
+            );
             std::process::exit(2);
         }
     };
@@ -230,6 +245,8 @@ fn help() {
     println!("  agentdock daemon services [--all]");
     println!("  agentdock daemon projects");
     println!("  agentdock daemon routes");
+    println!("  agentdock daemon sessions");
+    println!("  agentdock daemon session-logs <session-id>");
     println!("  agentdock daemon events");
     println!("  agentdock doctor");
 }
