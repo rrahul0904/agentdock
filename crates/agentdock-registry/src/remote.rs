@@ -438,10 +438,7 @@ impl Registry {
     }
 }
 
-fn require_active_device(
-    tx: &Transaction<'_>,
-    device_id: &str,
-) -> Result<(), RemoteRegistryError> {
+fn require_active_device(tx: &Transaction<'_>, device_id: &str) -> Result<(), RemoteRegistryError> {
     let active = tx
         .query_row(
             "SELECT 1
@@ -589,7 +586,9 @@ mod tests {
                 2_000,
             )
             .unwrap();
-        registry.approve_pairing_request(&request.id, 3_000).unwrap()
+        registry
+            .approve_pairing_request(&request.id, 3_000)
+            .unwrap()
     }
 
     fn create_agent_session(registry: &mut Registry) -> String {
