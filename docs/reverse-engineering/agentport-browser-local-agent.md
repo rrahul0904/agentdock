@@ -98,7 +98,7 @@ AgentDock remote gateway
                   +--> additional adapters later
 ```
 
-A relay may be introduced later, but the relay must not become the authority for local execution. AgentDock remains the local policy and ownership boundary.
+The implemented relay client is outbound-only and read-only. The relay is transport infrastructure, not the authority for local execution: paired-device proof, session/replay state, approval state, and capability enforcement remain inside AgentDock.
 
 ## Implementation status
 
@@ -107,9 +107,9 @@ Repository state on this branch:
 - Slice A — implemented: fail-closed remote capability contract and local discovery endpoint.
 - Slice B — implemented: durable coding-agent sessions, lifecycle state, bounded durable lifecycle logs, local API/CLI/MCP read paths.
 - Slice C — implemented at the local trust boundary: short-lived one-time pairing challenges, hash-only secret persistence, invalid-secret lockout, pending requests, explicit loopback-only approve/deny, durable paired devices, revocation, and audit events.
-- Slice D — not implemented: no remote relay or bidirectional transport is enabled.
-- Slice E — not implemented: no remote agent-input adapter or remote approval execution path is enabled.
-- Slice F — not implemented: no hosted browser control UI is claimed.
+- Slice D — repository implementation complete for the daemon side of the read-only path: Ed25519 paired-device possession proof, one-time auth challenges, durable transport sessions, fresh reconnect epochs, replay-protected RX/TX sequence state, opt-in outbound WSS with bearer-authenticated relay connection, redirect refusal, and session inventory/log frames only. A hosted relay and browser client are external dependencies and are not claimed as E2E-verified.
+- Slice E — partially implemented: parameter-bound, expiring, one-shot approval records exist and are invalidated by device revocation, but no remote agent-input adapter or remote approval execution path is enabled.
+- Slice F — not implemented in this repository: no hosted browser control UI is claimed.
 
 Pairing administration intentionally remains outside the MCP tool surface so a coding agent cannot approve or revoke its own remote access.
 
@@ -138,11 +138,12 @@ Pairing administration intentionally remains outside the MCP tool surface so a c
 
 ### Slice D — transport
 
-- WebSocket or comparable bidirectional channel.
-- Authenticated session handshake.
-- Server-side capability checks.
-- Backpressure and reconnect semantics.
-- Relay optional; direct/Tailscale-style transport can be supported separately.
+- Implemented daemon-side outbound WSS client; disabled unless explicitly configured.
+- Relay connection uses a bearer token and refuses non-WSS endpoints and redirects.
+- Paired remote devices authenticate separately with Ed25519 possession proof over a bound one-time challenge.
+- Durable transport session/epoch and monotonic RX/TX sequence state provide replay and reconnect protection.
+- Repository relay frames currently expose only session inventory and bounded session logs.
+- Hosted relay/browser interoperability, rate limiting at the hosted edge, and full Internet E2E verification remain external certification work.
 
 ### Slice E — bounded input + approval
 
