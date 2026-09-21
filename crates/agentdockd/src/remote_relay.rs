@@ -697,6 +697,38 @@ mod tests {
         }
         .validate()
         .is_err());
+        assert!(RelayConfig {
+            url: "wss://relay.example.test".into(),
+            token: format!("{}\n", "x".repeat(64)),
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn relay_rejects_sequence_values_outside_durable_counter_range() {
+        let mut registry = Registry::in_memory().unwrap();
+        let signing_key = SigningKey::from_bytes(&[11_u8; 32]);
+        let device_id = pair_device(&mut registry, &signing_key);
+        create_agent_session(&mut registry);
+        let (state, _) = authenticate(&mut registry, &signing_key, &device_id);
+        let mut authenticated = Some(state.clone());
+
+        let envelope = read_envelope(
+            &state,
+            u64::MAX,
+            RemoteCapability::SessionInventory,
+            None,
+        );
+        assert!(matches!(
+            handle_client_frame(
+                &mut registry,
+                &mut authenticated,
+                RelayClientFrame::SessionInventory { envelope },
+                4_200,
+            ),
+            RelayServerFrame::Error { ref code, .. } if code == "sequence_overflow"
+        ));
     }
 
     #[test]
