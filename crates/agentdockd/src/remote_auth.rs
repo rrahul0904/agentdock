@@ -1,6 +1,4 @@
-use agentdock_core::remote::{
-    RemoteAuthChallenge, RemoteAuthProof, REMOTE_PROTOCOL_VERSION,
-};
+use agentdock_core::remote::{RemoteAuthChallenge, RemoteAuthProof, REMOTE_PROTOCOL_VERSION};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use thiserror::Error;
 
