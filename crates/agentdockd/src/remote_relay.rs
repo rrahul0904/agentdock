@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 use tungstenite::client::ClientRequestBuilder;
 use tungstenite::http::Uri;
-use tungstenite::{connect, Message};
+use tungstenite::{connect_with_config, Message};
 
 const AUTH_CHALLENGE_TTL_MS: i64 = 60_000;
 const TRANSPORT_SESSION_TTL_MS: i64 = 30 * 60 * 1_000;
@@ -30,8 +30,14 @@ impl RelayConfig {
         if !self.url.starts_with("wss://") {
             return Err("remote relay URL must use wss://".to_string());
         }
-        if self.token.trim().len() < 32 {
-            return Err("remote relay token must contain at least 32 characters".to_string());
+        if self.token.trim().len() < 32
+            || self.token.contains('\r')
+            || self.token.contains('\n')
+        {
+            return Err(
+                "remote relay token must contain at least 32 characters and no line breaks"
+                    .to_string(),
+            );
         }
         Ok(())
     }
@@ -121,8 +127,8 @@ fn run_connection(config: &RelayConfig, registry: &Arc<Mutex<Registry>>) -> Resu
         .with_header("X-AgentDock-Protocol", REMOTE_PROTOCOL_VERSION.to_string())
         .with_sub_protocol(RELAY_SUBPROTOCOL);
 
-    let (mut socket, _) =
-        connect(request).map_err(|error| format!("remote relay connect failed: {error}"))?;
+    let (mut socket, _) = connect_with_config(request, None, 0)
+        .map_err(|error| format!("remote relay connect failed: {error}"))?;
 
     send_frame(
         &mut socket,
@@ -133,22 +139,20 @@ fn run_connection(config: &RelayConfig, registry: &Arc<Mutex<Registry>>) -> Resu
 
     let mut authenticated = None;
 
-    loop {
+    let result = loop {
         let message = match socket.read() {
             Ok(message) => message,
-            Err(error) => {
-                close_authenticated_session(registry, authenticated.take());
-                return Err(format!("remote relay read failed: {error}"));
-            }
+            Err(error) => break Err(format!("remote relay read failed: {error}")),
         };
 
         match message {
             Message::Text(text) => {
                 let response = match serde_json::from_str::<RelayClientFrame>(&text) {
                     Ok(frame) => {
-                        let mut registry = registry
-                            .lock()
-                            .map_err(|_| "registry mutex poisoned".to_string())?;
+                        let mut registry = match registry.lock() {
+                            Ok(registry) => registry,
+                            Err(_) => break Err("registry mutex poisoned".to_string()),
+                        };
                         handle_client_frame(&mut registry, &mut authenticated, frame, now_ms())
                     }
                     Err(error) => RelayServerFrame::Error {
@@ -157,20 +161,23 @@ fn run_connection(config: &RelayConfig, registry: &Arc<Mutex<Registry>>) -> Resu
                         message_id: None,
                     },
                 };
-                send_frame(&mut socket, &response)?;
+
+                if let Err(error) = send_frame(&mut socket, &response) {
+                    break Err(error);
+                }
             }
-            Message::Close(_) => {
-                close_authenticated_session(registry, authenticated.take());
-                return Ok(());
-            }
+            Message::Close(_) => break Ok(()),
             Message::Ping(payload) => {
-                socket
-                    .send(Message::Pong(payload))
-                    .map_err(|error| format!("remote relay pong failed: {error}"))?;
+                if let Err(error) = socket.send(Message::Pong(payload)) {
+                    break Err(format!("remote relay pong failed: {error}"));
+                }
             }
             Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
         }
-    }
+    };
+
+    close_authenticated_session(registry, authenticated.take());
+    result
 }
 
 fn send_frame<S>(
@@ -451,10 +458,21 @@ fn authorize_read_frame<'a>(
         ));
     }
 
+    let sequence = match i64::try_from(envelope.sequence) {
+        Ok(sequence) => sequence,
+        Err(_) => {
+            return Err(relay_error(
+                "sequence_overflow",
+                "remote transport sequence exceeds the durable counter range",
+                Some(envelope.message_id.clone()),
+            ));
+        }
+    };
+
     match registry.accept_remote_sequence(
         &state.transport_session_id,
         &state.epoch,
-        i64::try_from(envelope.sequence).unwrap_or(i64::MAX),
+        sequence,
         observed_at_ms,
     ) {
         Ok(_) => Ok(state),
