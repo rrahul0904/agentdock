@@ -1,9 +1,17 @@
 mod http;
+mod remote_auth;
 
 use agent_attribution::enrich_agent;
-use agentdock_core::{remote::remote_capabilities, Service};
+use agentdock_core::{
+    remote::{
+        remote_capabilities, RemoteAuthChallenge, RemoteAuthProof, REMOTE_PROTOCOL_VERSION,
+    },
+    Service,
+};
 use agentdock_proxy::{ProxyTarget, TargetResolver};
-use agentdock_registry::{now_ms, Registry, RegistryError, ServiceRecord};
+use agentdock_registry::{
+    now_ms, Registry, RegistryError, RemoteRegistryError, ServiceRecord,
+};
 use framework_detection::enrich_service;
 use port_manager::PortManager;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -23,6 +31,8 @@ const DEFAULT_PROXY_BIND: &str = "127.0.0.1:7777";
 const DEFAULT_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
 const PAIRING_CHALLENGE_TTL_MS: i64 = 5 * 60 * 1_000;
+const REMOTE_AUTH_CHALLENGE_TTL_MS: i64 = 60_000;
+const REMOTE_TRANSPORT_SESSION_TTL_MS: i64 = 30 * 60 * 1_000;
 
 fn main() {
     if let Err(error) = run() {
@@ -404,9 +414,20 @@ fn route_api(
             revoke_paired_device(request, state)
         }
 
+        ("POST", "/v1/remote/auth/challenges") => {
+            require_loopback(peer_is_loopback)?;
+            create_remote_auth_challenge(request, state)
+        }
+
+        ("POST", "/v1/remote/auth/prove") => {
+            require_loopback(peer_is_loopback)?;
+            prove_remote_auth(request, state)
+        }
+
         ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
             "enabled": false,
             "transport": "disabled",
+            "device_proof": "ed25519_bootstrap_ready_loopback_only",
             "transport_session_state": "durable_replay_protection_ready",
             "reconnect": "fresh_epoch_required",
             "approvals": "parameter_bound_one_shot_ready",
@@ -522,6 +543,12 @@ fn submit_pairing_request(
             json!({"error": "valid_device_public_key_required"}),
         ));
     };
+    if !remote_auth::is_supported_device_public_key(device_public_key) {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "ed25519_device_public_key_required"}),
+        ));
+    }
 
     let mut registry = lock_registry(state)?;
     match registry.submit_pairing_request(
@@ -612,6 +639,165 @@ fn revoke_paired_device(
         }))),
         Err(error) => pairing_registry_error(error),
     }
+}
+
+fn create_remote_auth_challenge(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+    let Some(device_id) = valid_json_string(&body, "device_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_id_required"}),
+        ));
+    };
+
+    let issued_at_ms = now_ms();
+    let expires_at_ms = issued_at_ms.saturating_add(REMOTE_AUTH_CHALLENGE_TTL_MS);
+    let challenge_id = format!("rac_{}", random_hex(16));
+    let server_nonce = random_hex(32);
+
+    let mut registry = lock_registry(state)?;
+    let public_key = match registry.paired_device_public_key(device_id) {
+        Ok(public_key) => public_key,
+        Err(error) => return remote_registry_error(error),
+    };
+    if !remote_auth::is_supported_device_public_key(&public_key) {
+        return Ok(ApiResponse::new(
+            409,
+            json!({"error": "paired_device_key_format_unsupported"}),
+        ));
+    }
+
+    match registry.create_remote_auth_challenge(
+        &challenge_id,
+        device_id,
+        &server_nonce,
+        issued_at_ms,
+        expires_at_ms,
+    ) {
+        Ok(record) => Ok(ApiResponse::new(
+            201,
+            json!({
+                "challenge": RemoteAuthChallenge {
+                    protocol_version: REMOTE_PROTOCOL_VERSION,
+                    device_id: record.device_id,
+                    challenge_id: record.id,
+                    server_nonce: record.server_nonce,
+                    issued_at_ms: record.issued_at_ms,
+                    expires_at_ms: record.expires_at_ms,
+                }
+            }),
+        )),
+        Err(error) => remote_registry_error(error),
+    }
+}
+
+fn prove_remote_auth(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let proof: RemoteAuthProof = match serde_json::from_slice(&request.body) {
+        Ok(proof) => proof,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_remote_auth_proof", "message": error.to_string()}),
+            ));
+        }
+    };
+    let observed_at_ms = now_ms();
+
+    let mut registry = lock_registry(state)?;
+    let challenge_record = match registry
+        .load_remote_auth_challenge(&proof.challenge_id, observed_at_ms)
+    {
+        Ok(challenge) => challenge,
+        Err(error) => return remote_registry_error(error),
+    };
+    let challenge = RemoteAuthChallenge {
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        device_id: challenge_record.device_id.clone(),
+        challenge_id: challenge_record.id.clone(),
+        server_nonce: challenge_record.server_nonce.clone(),
+        issued_at_ms: challenge_record.issued_at_ms,
+        expires_at_ms: challenge_record.expires_at_ms,
+    };
+    let public_key = match registry.paired_device_public_key(&challenge.device_id) {
+        Ok(public_key) => public_key,
+        Err(error) => return remote_registry_error(error),
+    };
+
+    if let Err(error) = remote_auth::verify_device_proof(&public_key, &challenge, &proof) {
+        return Ok(ApiResponse::new(
+            401,
+            json!({"error": "remote_auth_proof_rejected", "message": error.to_string()}),
+        ));
+    }
+
+    if let Err(error) = registry.consume_remote_auth_challenge(
+        &challenge.challenge_id,
+        &challenge.device_id,
+        &challenge.server_nonce,
+        observed_at_ms,
+    ) {
+        return remote_registry_error(error);
+    }
+
+    let transport_session_id = format!("rts_{}", random_hex(16));
+    let epoch = format!("epoch_{}", random_hex(16));
+    let expires_at_ms = observed_at_ms.saturating_add(REMOTE_TRANSPORT_SESSION_TTL_MS);
+
+    match registry.open_remote_transport_session(
+        &transport_session_id,
+        &challenge.device_id,
+        &epoch,
+        observed_at_ms,
+        expires_at_ms,
+    ) {
+        Ok(session) => Ok(ApiResponse::new(
+            201,
+            json!({
+                "authenticated": true,
+                "session": session,
+                "remote_transport_enabled": false
+            }),
+        )),
+        Err(error) => remote_registry_error(error),
+    }
+}
+
+fn remote_registry_error(error: RemoteRegistryError) -> Result<ApiResponse, String> {
+    let response = match error {
+        RemoteRegistryError::DeviceUnavailable
+        | RemoteRegistryError::AuthChallengeNotFound
+        | RemoteRegistryError::SessionNotFound
+        | RemoteRegistryError::ApprovalNotFound
+        | RemoteRegistryError::TargetSessionNotFound => {
+            ApiResponse::new(404, json!({"error": error.to_string()}))
+        }
+        RemoteRegistryError::AuthChallengeUnavailable
+        | RemoteRegistryError::AuthChallengeBindingMismatch
+        | RemoteRegistryError::SessionUnavailable
+        | RemoteRegistryError::EpochMismatch
+        | RemoteRegistryError::ReplayDetected
+        | RemoteRegistryError::SequenceOverflow
+        | RemoteRegistryError::ApprovalUnavailable
+        | RemoteRegistryError::ApprovalBindingMismatch => {
+            ApiResponse::new(409, json!({"error": error.to_string()}))
+        }
+        RemoteRegistryError::Sql(error) => return Err(error.to_string()),
+    };
+    Ok(response)
 }
 
 fn pairing_registry_error(error: RegistryError) -> Result<ApiResponse, String> {
