@@ -10,9 +10,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 mod remote;
-pub use remote::{RemoteApprovalRecord, RemoteRegistryError, RemoteTransportSessionRecord};
+pub use remote::{
+    RemoteApprovalRecord, RemoteAuthChallengeRecord, RemoteRegistryError,
+    RemoteTransportSessionRecord,
+};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
 
 #[derive(Debug, Error)]
