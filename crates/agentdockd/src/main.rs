@@ -3,15 +3,11 @@ mod remote_auth;
 
 use agent_attribution::enrich_agent;
 use agentdock_core::{
-    remote::{
-        remote_capabilities, RemoteAuthChallenge, RemoteAuthProof, REMOTE_PROTOCOL_VERSION,
-    },
+    remote::{remote_capabilities, RemoteAuthChallenge, RemoteAuthProof, REMOTE_PROTOCOL_VERSION},
     Service,
 };
 use agentdock_proxy::{ProxyTarget, TargetResolver};
-use agentdock_registry::{
-    now_ms, Registry, RegistryError, RemoteRegistryError, ServiceRecord,
-};
+use agentdock_registry::{now_ms, Registry, RegistryError, RemoteRegistryError, ServiceRecord};
 use framework_detection::enrich_service;
 use port_manager::PortManager;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -718,12 +714,11 @@ fn prove_remote_auth(
     let observed_at_ms = now_ms();
 
     let mut registry = lock_registry(state)?;
-    let challenge_record = match registry
-        .load_remote_auth_challenge(&proof.challenge_id, observed_at_ms)
-    {
-        Ok(challenge) => challenge,
-        Err(error) => return remote_registry_error(error),
-    };
+    let challenge_record =
+        match registry.load_remote_auth_challenge(&proof.challenge_id, observed_at_ms) {
+            Ok(challenge) => challenge,
+            Err(error) => return remote_registry_error(error),
+        };
     let challenge = RemoteAuthChallenge {
         protocol_version: REMOTE_PROTOCOL_VERSION,
         device_id: challenge_record.device_id.clone(),
