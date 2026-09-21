@@ -406,7 +406,10 @@ fn route_api(
 
         ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
             "enabled": false,
-            "transport": "not_configured",
+            "transport": "disabled",
+            "transport_session_state": "durable_replay_protection_ready",
+            "reconnect": "fresh_epoch_required",
+            "approvals": "parameter_bound_one_shot_ready",
             "pairing": "local_approval_ready",
             "capabilities": remote_capabilities(),
             "safety": {

@@ -9,7 +9,12 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-const SCHEMA_VERSION: i64 = 4;
+mod remote;
+pub use remote::{
+    RemoteApprovalRecord, RemoteRegistryError, RemoteTransportSessionRecord,
+};
+
+const SCHEMA_VERSION: i64 = 5;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
 
 #[derive(Debug, Error)]
@@ -154,6 +159,8 @@ pub struct RegistryStatus {
     pub agent_session_logs: usize,
     pub pairing_requests: usize,
     pub paired_devices: usize,
+    pub remote_transport_sessions: usize,
+    pub remote_approvals: usize,
     pub routes: usize,
     pub active: usize,
     pub stale: usize,
@@ -323,6 +330,8 @@ impl Registry {
              CREATE INDEX IF NOT EXISTS idx_events_created_at
              ON events(created_at_ms);",
         )?;
+
+        remote::migrate(&self.conn)?;
 
         self.conn.execute(
             "INSERT INTO metadata(key, value)
@@ -1226,6 +1235,22 @@ impl Registry {
              WHERE id = ?1",
             params![device_id, revoked_at_ms],
         )?;
+        tx.execute(
+            "UPDATE remote_transport_sessions
+             SET closed_at_ms = COALESCE(closed_at_ms, ?2)
+             WHERE device_id = ?1
+               AND closed_at_ms IS NULL",
+            params![device_id, revoked_at_ms],
+        )?;
+        tx.execute(
+            "UPDATE remote_approvals
+             SET status = 'revoked',
+                 decided_at_ms = COALESCE(decided_at_ms, ?2)
+             WHERE device_id = ?1
+               AND consumed_at_ms IS NULL
+               AND status IN ('pending', 'approved')",
+            params![device_id, revoked_at_ms],
+        )?;
         if previous_revoked_at_ms.is_none() {
             insert_typed_event(
                 &tx,
@@ -1403,6 +1428,9 @@ impl Registry {
             scalar_count(&self.conn, "SELECT COUNT(*) FROM agent_session_logs")?;
         let pairing_requests = scalar_count(&self.conn, "SELECT COUNT(*) FROM pairing_requests")?;
         let paired_devices = scalar_count(&self.conn, "SELECT COUNT(*) FROM paired_devices")?;
+        let remote_transport_sessions =
+            scalar_count(&self.conn, "SELECT COUNT(*) FROM remote_transport_sessions")?;
+        let remote_approvals = scalar_count(&self.conn, "SELECT COUNT(*) FROM remote_approvals")?;
         let routes = scalar_count(&self.conn, "SELECT COUNT(*) FROM routes")?;
         let events = scalar_count(&self.conn, "SELECT COUNT(*) FROM events")?;
         let (active, stale, orphaned) = state_counts_conn(&self.conn)?;
@@ -1415,6 +1443,8 @@ impl Registry {
             agent_session_logs,
             pairing_requests,
             paired_devices,
+            remote_transport_sessions,
+            remote_approvals,
             routes,
             active,
             stale,
