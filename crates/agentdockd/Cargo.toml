@@ -22,3 +22,4 @@ rand.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
 thiserror.workspace = true
+tungstenite.workspace = true
