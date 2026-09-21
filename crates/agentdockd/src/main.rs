@@ -1,5 +1,6 @@
 mod http;
 mod remote_auth;
+mod remote_relay;
 
 use agent_attribution::enrich_agent;
 use agentdock_core::{
@@ -43,10 +44,17 @@ struct ProxyRuntime {
     bind: SocketAddr,
 }
 
+#[derive(Clone)]
+struct RelayRuntime {
+    enabled: bool,
+    url: Option<String>,
+}
+
 struct DaemonState {
     registry: Arc<Mutex<Registry>>,
     ports: Arc<Mutex<PortManager>>,
     proxy: ProxyRuntime,
+    relay: RelayRuntime,
 }
 
 struct ApiResponse {
@@ -85,6 +93,25 @@ fn run() -> Result<(), String> {
 
     let include_udp = args.iter().any(|arg| arg == "--udp");
     let proxy_enabled = !args.iter().any(|arg| arg == "--no-proxy");
+
+    let relay_url = value_after(&args, "--remote-relay-url")
+        .or_else(|| std::env::var("AGENTDOCK_RELAY_URL").ok());
+    let relay_token = std::env::var("AGENTDOCK_RELAY_TOKEN").ok();
+    let relay_config = match (relay_url.clone(), relay_token) {
+        (None, None) => None,
+        (Some(url), Some(token)) => Some(remote_relay::RelayConfig { url, token }),
+        (Some(_), None) => {
+            return Err(
+                "AGENTDOCK_RELAY_TOKEN is required when remote relay is configured".to_string(),
+            );
+        }
+        (None, Some(_)) => {
+            return Err(
+                "AGENTDOCK_RELAY_URL or --remote-relay-url is required with AGENTDOCK_RELAY_TOKEN"
+                    .to_string(),
+            );
+        }
+    };
 
     let db_path = value_after(&args, "--db")
         .map(PathBuf::from)
@@ -125,12 +152,20 @@ fn run() -> Result<(), String> {
         });
     }
 
+    if let Some(config) = relay_config.clone() {
+        remote_relay::spawn(config, Arc::clone(&registry))?;
+    }
+
     let state = DaemonState {
         registry,
         ports,
         proxy: ProxyRuntime {
             enabled: proxy_enabled,
             bind: proxy_bind_addr,
+        },
+        relay: RelayRuntime {
+            enabled: relay_config.is_some(),
+            url: relay_url.clone(),
         },
     };
 
@@ -147,6 +182,12 @@ fn run() -> Result<(), String> {
         println!("  proxy: http://{proxy_bind}");
     } else {
         println!("  proxy: disabled");
+    }
+
+    if let Some(url) = relay_url.as_deref() {
+        println!("  remote relay: {url} (authenticated read-only WSS)");
+    } else {
+        println!("  remote relay: disabled");
     }
 
     for stream in listener.incoming() {
@@ -290,6 +331,10 @@ fn route_api(
                     "enabled": state.proxy.enabled,
                     "bind": state.proxy.bind.to_string()
                 },
+                "remote_relay": {
+                    "enabled": state.relay.enabled,
+                    "url": state.relay.url
+                },
                 "registry": status
             })))
         }
@@ -421,8 +466,12 @@ fn route_api(
         }
 
         ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
-            "enabled": false,
-            "transport": "disabled",
+            "enabled": state.relay.enabled,
+            "transport": if state.relay.enabled {
+                "outbound_wss_read_only"
+            } else {
+                "disabled"
+            },
             "device_proof": "ed25519_bootstrap_ready_loopback_only",
             "transport_session_state": "durable_replay_protection_ready",
             "reconnect": "fresh_epoch_required",
