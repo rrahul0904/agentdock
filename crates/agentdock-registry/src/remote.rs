@@ -9,6 +9,12 @@ pub enum RemoteRegistryError {
     Sql(#[from] rusqlite::Error),
     #[error("paired device is missing or revoked")]
     DeviceUnavailable,
+    #[error("remote authentication challenge not found")]
+    AuthChallengeNotFound,
+    #[error("remote authentication challenge is unavailable")]
+    AuthChallengeUnavailable,
+    #[error("remote authentication challenge binding mismatch")]
+    AuthChallengeBindingMismatch,
     #[error("remote transport session not found")]
     SessionNotFound,
     #[error("remote transport session is closed or expired")]
@@ -27,6 +33,16 @@ pub enum RemoteRegistryError {
     ApprovalUnavailable,
     #[error("remote approval binding mismatch")]
     ApprovalBindingMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteAuthChallengeRecord {
+    pub id: String,
+    pub device_id: String,
+    pub server_nonce: String,
+    pub issued_at_ms: i64,
+    pub expires_at_ms: i64,
+    pub consumed_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,7 +73,20 @@ pub struct RemoteApprovalRecord {
 
 pub(super) fn migrate(conn: &Connection) -> Result<(), RegistryError> {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS remote_transport_sessions (
+        "CREATE TABLE IF NOT EXISTS remote_auth_challenges (
+            id TEXT PRIMARY KEY,
+            device_id TEXT NOT NULL,
+            server_nonce TEXT NOT NULL,
+            issued_at_ms INTEGER NOT NULL,
+            expires_at_ms INTEGER NOT NULL,
+            consumed_at_ms INTEGER,
+            FOREIGN KEY(device_id) REFERENCES paired_devices(id)
+         );
+
+         CREATE INDEX IF NOT EXISTS idx_remote_auth_challenges_device
+         ON remote_auth_challenges(device_id, issued_at_ms DESC);
+
+         CREATE TABLE IF NOT EXISTS remote_transport_sessions (
             id TEXT PRIMARY KEY,
             device_id TEXT NOT NULL,
             epoch TEXT NOT NULL,
@@ -102,6 +131,178 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), RegistryError> {
 }
 
 impl Registry {
+    pub fn paired_device_public_key(
+        &self,
+        device_id: &str,
+    ) -> Result<String, RemoteRegistryError> {
+        self.conn
+            .query_row(
+                "SELECT public_key
+                 FROM paired_devices
+                 WHERE id = ?1
+                   AND revoked_at_ms IS NULL",
+                params![device_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(RemoteRegistryError::DeviceUnavailable)
+    }
+
+    pub fn create_remote_auth_challenge(
+        &mut self,
+        challenge_id: &str,
+        device_id: &str,
+        server_nonce: &str,
+        issued_at_ms: i64,
+        expires_at_ms: i64,
+    ) -> Result<RemoteAuthChallengeRecord, RemoteRegistryError> {
+        if expires_at_ms <= issued_at_ms {
+            return Err(RemoteRegistryError::AuthChallengeUnavailable);
+        }
+
+        let tx = self.conn.transaction()?;
+        require_active_device(&tx, device_id)?;
+
+        tx.execute(
+            "INSERT INTO remote_auth_challenges(
+                id,
+                device_id,
+                server_nonce,
+                issued_at_ms,
+                expires_at_ms,
+                consumed_at_ms
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            params![
+                challenge_id,
+                device_id,
+                server_nonce,
+                issued_at_ms,
+                expires_at_ms
+            ],
+        )?;
+
+        insert_typed_event(
+            &tx,
+            "remote.auth.challenge.created",
+            "remote_auth_challenge",
+            challenge_id,
+            serde_json::json!({"device_id": device_id}),
+            issued_at_ms,
+        )
+        .map_err(remote_registry_event_error)?;
+
+        tx.commit()?;
+
+        Ok(RemoteAuthChallengeRecord {
+            id: challenge_id.to_string(),
+            device_id: device_id.to_string(),
+            server_nonce: server_nonce.to_string(),
+            issued_at_ms,
+            expires_at_ms,
+            consumed_at_ms: None,
+        })
+    }
+
+    pub fn load_remote_auth_challenge(
+        &self,
+        challenge_id: &str,
+        observed_at_ms: i64,
+    ) -> Result<RemoteAuthChallengeRecord, RemoteRegistryError> {
+        let challenge = self
+            .conn
+            .query_row(
+                "SELECT id, device_id, server_nonce, issued_at_ms, expires_at_ms, consumed_at_ms
+                 FROM remote_auth_challenges
+                 WHERE id = ?1",
+                params![challenge_id],
+                |row| {
+                    Ok(RemoteAuthChallengeRecord {
+                        id: row.get(0)?,
+                        device_id: row.get(1)?,
+                        server_nonce: row.get(2)?,
+                        issued_at_ms: row.get(3)?,
+                        expires_at_ms: row.get(4)?,
+                        consumed_at_ms: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(RemoteRegistryError::AuthChallengeNotFound)?;
+
+        if challenge.consumed_at_ms.is_some() || observed_at_ms > challenge.expires_at_ms {
+            return Err(RemoteRegistryError::AuthChallengeUnavailable);
+        }
+
+        self.paired_device_public_key(&challenge.device_id)?;
+        Ok(challenge)
+    }
+
+    pub fn consume_remote_auth_challenge(
+        &mut self,
+        challenge_id: &str,
+        device_id: &str,
+        server_nonce: &str,
+        consumed_at_ms: i64,
+    ) -> Result<RemoteAuthChallengeRecord, RemoteRegistryError> {
+        let tx = self.conn.transaction()?;
+        require_active_device(&tx, device_id)?;
+
+        let updated = tx.execute(
+            "UPDATE remote_auth_challenges
+             SET consumed_at_ms = ?4
+             WHERE id = ?1
+               AND device_id = ?2
+               AND server_nonce = ?3
+               AND consumed_at_ms IS NULL
+               AND expires_at_ms >= ?4",
+            params![challenge_id, device_id, server_nonce, consumed_at_ms],
+        )?;
+
+        if updated != 1 {
+            let exists = tx
+                .query_row(
+                    "SELECT device_id, server_nonce
+                     FROM remote_auth_challenges
+                     WHERE id = ?1",
+                    params![challenge_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+
+            return Err(match exists {
+                None => RemoteRegistryError::AuthChallengeNotFound,
+                Some((stored_device_id, stored_nonce))
+                    if stored_device_id != device_id || stored_nonce != server_nonce =>
+                {
+                    RemoteRegistryError::AuthChallengeBindingMismatch
+                }
+                Some(_) => RemoteRegistryError::AuthChallengeUnavailable,
+            });
+        }
+
+        insert_typed_event(
+            &tx,
+            "remote.auth.challenge.consumed",
+            "remote_auth_challenge",
+            challenge_id,
+            serde_json::json!({"device_id": device_id}),
+            consumed_at_ms,
+        )
+        .map_err(remote_registry_event_error)?;
+
+        tx.commit()?;
+
+        Ok(RemoteAuthChallengeRecord {
+            id: challenge_id.to_string(),
+            device_id: device_id.to_string(),
+            server_nonce: server_nonce.to_string(),
+            issued_at_ms: 0,
+            expires_at_ms: 0,
+            consumed_at_ms: Some(consumed_at_ms),
+        })
+    }
+
     pub fn open_remote_transport_session(
         &mut self,
         session_id: &str,
