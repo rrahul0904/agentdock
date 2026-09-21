@@ -180,8 +180,8 @@ fn send_frame<S>(
 where
     S: std::io::Read + std::io::Write,
 {
-    let payload =
-        serde_json::to_string(frame).map_err(|error| format!("relay frame encode failed: {error}"))?;
+    let payload = serde_json::to_string(frame)
+        .map_err(|error| format!("relay frame encode failed: {error}"))?;
     socket
         .send(Message::Text(payload.into()))
         .map_err(|error| format!("relay frame send failed: {error}"))
@@ -195,10 +195,8 @@ fn close_authenticated_session(
         return;
     };
     if let Ok(mut registry) = registry.lock() {
-        let _ = registry.close_remote_transport_session(
-            &authenticated.transport_session_id,
-            now_ms(),
-        );
+        let _ =
+            registry.close_remote_transport_session(&authenticated.transport_session_id, now_ms());
     }
 }
 
@@ -279,8 +277,8 @@ fn handle_client_frame(
             }
 
             if let Some(previous) = authenticated.take() {
-                let _ =
-                    registry.close_remote_transport_session(&previous.transport_session_id, observed_at_ms);
+                let _ = registry
+                    .close_remote_transport_session(&previous.transport_session_id, observed_at_ms);
             }
 
             let transport_session_id = format!("rts_{}", random_hex(16));
@@ -325,7 +323,11 @@ fn handle_client_frame(
             let sessions = match registry.list_agent_sessions() {
                 Ok(sessions) => sessions,
                 Err(error) => {
-                    return relay_error("registry_error", &error.to_string(), Some(envelope.message_id))
+                    return relay_error(
+                        "registry_error",
+                        &error.to_string(),
+                        Some(envelope.message_id),
+                    )
                 }
             };
             let response_envelope = match response_envelope(
@@ -368,10 +370,18 @@ fn handle_client_frame(
                 );
             }
 
-            let logs = match registry.list_agent_session_logs(&session_id, after.max(0), limit.clamp(1, 200)) {
+            let logs = match registry.list_agent_session_logs(
+                &session_id,
+                after.max(0),
+                limit.clamp(1, 200),
+            ) {
                 Ok(logs) => logs,
                 Err(error) => {
-                    return relay_error("registry_error", &error.to_string(), Some(envelope.message_id))
+                    return relay_error(
+                        "registry_error",
+                        &error.to_string(),
+                        Some(envelope.message_id),
+                    )
                 }
             };
             let response_envelope = match response_envelope(
@@ -463,11 +473,7 @@ fn response_envelope(
     observed_at_ms: i64,
 ) -> Result<RemoteTransportEnvelope, RelayServerFrame> {
     let sequence = registry
-        .next_remote_tx_sequence(
-            &state.transport_session_id,
-            &state.epoch,
-            observed_at_ms,
-        )
+        .next_remote_tx_sequence(&state.transport_session_id, &state.epoch, observed_at_ms)
         .map_err(|error| registry_error_frame(error, None))?;
 
     Ok(RemoteTransportEnvelope {
@@ -684,12 +690,7 @@ mod tests {
         let (state, _) = authenticate(&mut registry, &signing_key, &device_id);
         let mut authenticated = Some(state.clone());
 
-        let envelope = read_envelope(
-            &state,
-            1,
-            RemoteCapability::SessionInventory,
-            None,
-        );
+        let envelope = read_envelope(&state, 1, RemoteCapability::SessionInventory, None);
         assert!(matches!(
             handle_client_frame(
                 &mut registry,
