@@ -248,37 +248,43 @@ impl Registry {
         let tx = self.conn.transaction()?;
         require_active_device(&tx, device_id)?;
 
+        let challenge = tx
+            .query_row(
+                "SELECT id, device_id, server_nonce, issued_at_ms, expires_at_ms, consumed_at_ms
+                 FROM remote_auth_challenges
+                 WHERE id = ?1",
+                params![challenge_id],
+                |row| {
+                    Ok(RemoteAuthChallengeRecord {
+                        id: row.get(0)?,
+                        device_id: row.get(1)?,
+                        server_nonce: row.get(2)?,
+                        issued_at_ms: row.get(3)?,
+                        expires_at_ms: row.get(4)?,
+                        consumed_at_ms: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(RemoteRegistryError::AuthChallengeNotFound)?;
+
+        if challenge.device_id != device_id || challenge.server_nonce != server_nonce {
+            return Err(RemoteRegistryError::AuthChallengeBindingMismatch);
+        }
+        if challenge.consumed_at_ms.is_some() || consumed_at_ms > challenge.expires_at_ms {
+            return Err(RemoteRegistryError::AuthChallengeUnavailable);
+        }
+
         let updated = tx.execute(
             "UPDATE remote_auth_challenges
-             SET consumed_at_ms = ?4
+             SET consumed_at_ms = ?2
              WHERE id = ?1
-               AND device_id = ?2
-               AND server_nonce = ?3
                AND consumed_at_ms IS NULL
-               AND expires_at_ms >= ?4",
-            params![challenge_id, device_id, server_nonce, consumed_at_ms],
+               AND expires_at_ms >= ?2",
+            params![challenge_id, consumed_at_ms],
         )?;
-
         if updated != 1 {
-            let exists = tx
-                .query_row(
-                    "SELECT device_id, server_nonce
-                     FROM remote_auth_challenges
-                     WHERE id = ?1",
-                    params![challenge_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()?;
-
-            return Err(match exists {
-                None => RemoteRegistryError::AuthChallengeNotFound,
-                Some((stored_device_id, stored_nonce))
-                    if stored_device_id != device_id || stored_nonce != server_nonce =>
-                {
-                    RemoteRegistryError::AuthChallengeBindingMismatch
-                }
-                Some(_) => RemoteRegistryError::AuthChallengeUnavailable,
-            });
+            return Err(RemoteRegistryError::AuthChallengeUnavailable);
         }
 
         insert_typed_event(
@@ -294,12 +300,8 @@ impl Registry {
         tx.commit()?;
 
         Ok(RemoteAuthChallengeRecord {
-            id: challenge_id.to_string(),
-            device_id: device_id.to_string(),
-            server_nonce: server_nonce.to_string(),
-            issued_at_ms: 0,
-            expires_at_ms: 0,
             consumed_at_ms: Some(consumed_at_ms),
+            ..challenge
         })
     }
 
