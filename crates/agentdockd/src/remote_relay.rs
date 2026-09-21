@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tungstenite::client::ClientRequestBuilder;
+use tungstenite::client::{connect_with_config, ClientRequestBuilder};
 use tungstenite::http::Uri;
-use tungstenite::{connect_with_config, Message};
+use tungstenite::Message;
 
 const AUTH_CHALLENGE_TTL_MS: i64 = 60_000;
 const TRANSPORT_SESSION_TTL_MS: i64 = 30 * 60 * 1_000;
@@ -30,10 +30,7 @@ impl RelayConfig {
         if !self.url.starts_with("wss://") {
             return Err("remote relay URL must use wss://".to_string());
         }
-        if self.token.trim().len() < 32
-            || self.token.contains('\r')
-            || self.token.contains('\n')
-        {
+        if self.token.trim().len() < 32 || self.token.contains('\r') || self.token.contains('\n') {
             return Err(
                 "remote relay token must contain at least 32 characters and no line breaks"
                     .to_string(),
@@ -714,12 +711,7 @@ mod tests {
         let (state, _) = authenticate(&mut registry, &signing_key, &device_id);
         let mut authenticated = Some(state.clone());
 
-        let envelope = read_envelope(
-            &state,
-            u64::MAX,
-            RemoteCapability::SessionInventory,
-            None,
-        );
+        let envelope = read_envelope(&state, u64::MAX, RemoteCapability::SessionInventory, None);
         assert!(matches!(
             handle_client_frame(
                 &mut registry,
