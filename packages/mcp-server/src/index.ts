@@ -188,6 +188,56 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
+    "list_agent_sessions",
+    {
+      description:
+        "List durable AgentDock coding-agent sessions with project, service, agent kind, and lifecycle state.",
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        return textResult(
+          await daemonRequest("GET", "/v1/agent-sessions"),
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_agent_session_logs",
+    {
+      description:
+        "Read bounded AgentDock lifecycle logs for one durable coding-agent session.",
+      inputSchema: z.object({
+        sessionId: z.string().min(1),
+        after: z.number().int().min(0).optional().default(0),
+        limit: z.number().int().min(1).max(500).optional().default(200),
+      }),
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ sessionId, after, limit }) => {
+      try {
+        return textResult(
+          await daemonRequest(
+            "GET",
+            `/v1/agent-session-logs?session_id=${encodeURIComponent(sessionId)}&after=${after}&limit=${limit}`,
+          ),
+        );
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
+  );
+
+  server.registerTool(
     "list_routes",
     {
       description:

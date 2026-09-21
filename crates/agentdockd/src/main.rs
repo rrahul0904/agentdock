@@ -1,14 +1,21 @@
 mod http;
+mod remote_auth;
+mod remote_relay;
 
 use agent_attribution::enrich_agent;
-use agentdock_core::Service;
+use agentdock_core::{
+    remote::{remote_capabilities, RemoteAuthChallenge, RemoteAuthProof, REMOTE_PROTOCOL_VERSION},
+    Service,
+};
 use agentdock_proxy::{ProxyTarget, TargetResolver};
-use agentdock_registry::{now_ms, Registry, ServiceRecord};
+use agentdock_registry::{now_ms, Registry, RegistryError, RemoteRegistryError, ServiceRecord};
 use framework_detection::enrich_service;
 use port_manager::PortManager;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
 use project_resolver::resolve_project;
+use rand::RngCore;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -20,6 +27,9 @@ const DEFAULT_BIND: &str = "127.0.0.1:7317";
 const DEFAULT_PROXY_BIND: &str = "127.0.0.1:7777";
 const DEFAULT_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_ORPHAN_AFTER_MS: i64 = 30_000;
+const PAIRING_CHALLENGE_TTL_MS: i64 = 5 * 60 * 1_000;
+const REMOTE_AUTH_CHALLENGE_TTL_MS: i64 = 60_000;
+const REMOTE_TRANSPORT_SESSION_TTL_MS: i64 = 30 * 60 * 1_000;
 
 fn main() {
     if let Err(error) = run() {
@@ -34,10 +44,17 @@ struct ProxyRuntime {
     bind: SocketAddr,
 }
 
+#[derive(Clone)]
+struct RelayRuntime {
+    enabled: bool,
+    url: Option<String>,
+}
+
 struct DaemonState {
     registry: Arc<Mutex<Registry>>,
     ports: Arc<Mutex<PortManager>>,
     proxy: ProxyRuntime,
+    relay: RelayRuntime,
 }
 
 struct ApiResponse {
@@ -58,12 +75,11 @@ impl ApiResponse {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let bind = value_after(&args, "--bind")
-        .unwrap_or_else(|| DEFAULT_BIND.to_string());
+    let bind = value_after(&args, "--bind").unwrap_or_else(|| DEFAULT_BIND.to_string());
     let bind_addr = parse_bind(&bind, &args)?;
 
-    let proxy_bind = value_after(&args, "--proxy-bind")
-        .unwrap_or_else(|| DEFAULT_PROXY_BIND.to_string());
+    let proxy_bind =
+        value_after(&args, "--proxy-bind").unwrap_or_else(|| DEFAULT_PROXY_BIND.to_string());
     let proxy_bind_addr = parse_bind(&proxy_bind, &args)?;
 
     let interval_ms = value_after(&args, "--interval-ms")
@@ -78,20 +94,35 @@ fn run() -> Result<(), String> {
     let include_udp = args.iter().any(|arg| arg == "--udp");
     let proxy_enabled = !args.iter().any(|arg| arg == "--no-proxy");
 
+    let relay_url = value_after(&args, "--remote-relay-url")
+        .or_else(|| std::env::var("AGENTDOCK_RELAY_URL").ok());
+    let relay_token = std::env::var("AGENTDOCK_RELAY_TOKEN").ok();
+    let relay_config = match (relay_url.clone(), relay_token) {
+        (None, None) => None,
+        (Some(url), Some(token)) => Some(remote_relay::RelayConfig { url, token }),
+        (Some(_), None) => {
+            return Err(
+                "AGENTDOCK_RELAY_TOKEN is required when remote relay is configured".to_string(),
+            );
+        }
+        (None, Some(_)) => {
+            return Err(
+                "AGENTDOCK_RELAY_URL or --remote-relay-url is required with AGENTDOCK_RELAY_TOKEN"
+                    .to_string(),
+            );
+        }
+    };
+
     let db_path = value_after(&args, "--db")
         .map(PathBuf::from)
         .unwrap_or_else(default_db_path);
 
-    if let Some(parent) = db_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-    {
+    if let Some(parent) = db_path.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
     }
 
-    let mut registry = Registry::open(&db_path)
-        .map_err(|error| error.to_string())?;
+    let mut registry = Registry::open(&db_path).map_err(|error| error.to_string())?;
     registry.set_orphan_after_ms(orphan_after_ms);
 
     let registry = Arc::new(Mutex::new(registry));
@@ -121,12 +152,20 @@ fn run() -> Result<(), String> {
         });
     }
 
+    if let Some(config) = relay_config.clone() {
+        remote_relay::spawn(config, Arc::clone(&registry))?;
+    }
+
     let state = DaemonState {
         registry,
         ports,
         proxy: ProxyRuntime {
             enabled: proxy_enabled,
             bind: proxy_bind_addr,
+        },
+        relay: RelayRuntime {
+            enabled: relay_config.is_some(),
+            url: relay_url.clone(),
         },
     };
 
@@ -143,6 +182,12 @@ fn run() -> Result<(), String> {
         println!("  proxy: http://{proxy_bind}");
     } else {
         println!("  proxy: disabled");
+    }
+
+    if let Some(url) = relay_url.as_deref() {
+        println!("  remote relay: {url} (authenticated read-only WSS)");
+    } else {
+        println!("  remote relay: disabled");
     }
 
     for stream in listener.incoming() {
@@ -194,9 +239,7 @@ fn service_socket(record: &ServiceRecord) -> Result<SocketAddr, String> {
 
     let ip = match address {
         "*" | "0.0.0.0" | "localhost" => IpAddr::from([127, 0, 0, 1]),
-        "::" => "::1"
-            .parse::<IpAddr>()
-            .map_err(|error| error.to_string())?,
+        "::" => "::1".parse::<IpAddr>().map_err(|error| error.to_string())?,
         value => value
             .parse::<IpAddr>()
             .map_err(|error| format!("unsupported service bind address {value}: {error}"))?,
@@ -205,10 +248,7 @@ fn service_socket(record: &ServiceRecord) -> Result<SocketAddr, String> {
     Ok(SocketAddr::new(ip, record.service.port))
 }
 
-fn reconcile_once(
-    registry: &Arc<Mutex<Registry>>,
-    include_udp: bool,
-) -> Result<(), String> {
+fn reconcile_once(registry: &Arc<Mutex<Registry>>, include_udp: bool) -> Result<(), String> {
     let services = discover_services(include_udp)?;
 
     let mut registry = registry
@@ -235,9 +275,7 @@ fn reconcile_once(
 
 fn discover_services(include_udp: bool) -> Result<Vec<Service>, String> {
     let discovery = NativeDiscovery::new(DiscoveryOptions { include_udp });
-    let mut services = discovery
-        .scan()
-        .map_err(|error| error.to_string())?;
+    let mut services = discovery.scan().map_err(|error| error.to_string())?;
 
     for service in &mut services {
         if let Some(cwd) = service.working_directory.as_deref() {
@@ -251,30 +289,26 @@ fn discover_services(include_udp: bool) -> Result<Vec<Service>, String> {
     Ok(services)
 }
 
-fn handle_client(
-    mut stream: TcpStream,
-    state: &DaemonState,
-) -> Result<(), String> {
+fn handle_client(mut stream: TcpStream, state: &DaemonState) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .map_err(|error| error.to_string())?;
+    let peer_is_loopback = stream
+        .peer_addr()
+        .map(|address| address.ip().is_loopback())
+        .unwrap_or(false);
 
-    let request = http::read_request(&mut stream)
-        .map_err(|error| error.to_string())?;
+    let request = http::read_request(&mut stream).map_err(|error| error.to_string())?;
 
-    let response = route_api(&request, state)?;
+    let response = route_api(&request, state, peer_is_loopback)?;
 
-    http::write_json(
-        &mut stream,
-        response.status,
-        response.body,
-    )
-    .map_err(|error| error.to_string())
+    http::write_json(&mut stream, response.status, response.body).map_err(|error| error.to_string())
 }
 
 fn route_api(
     request: &http::HttpRequest,
     state: &DaemonState,
+    peer_is_loopback: bool,
 ) -> Result<ApiResponse, String> {
     let (path, query) = split_target(&request.target);
 
@@ -286,9 +320,7 @@ fn route_api(
 
         ("GET", "/v1/status") => {
             let registry = lock_registry(state)?;
-            let status = registry
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = registry.status().map_err(|error| error.to_string())?;
 
             Ok(ApiResponse::ok(json!({
                 "daemon": {
@@ -298,6 +330,10 @@ fn route_api(
                 "proxy": {
                     "enabled": state.proxy.enabled,
                     "bind": state.proxy.bind.to_string()
+                },
+                "remote_relay": {
+                    "enabled": state.relay.enabled,
+                    "url": state.relay.url
                 },
                 "registry": status
             })))
@@ -328,14 +364,126 @@ fn route_api(
 
         ("GET", "/v1/routes") => {
             let registry = lock_registry(state)?;
-            let routes = registry
-                .list_routes()
-                .map_err(|error| error.to_string())?;
+            let routes = registry.list_routes().map_err(|error| error.to_string())?;
 
             Ok(ApiResponse::ok(json!({
                 "routes": routes
             })))
         }
+
+        ("GET", "/v1/agent-sessions") => {
+            let registry = lock_registry(state)?;
+            let sessions = registry
+                .list_agent_sessions()
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "sessions": sessions
+            })))
+        }
+
+        ("GET", "/v1/agent-session-logs") => {
+            let Some(session_id) = query_value(query, "session_id")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return Ok(ApiResponse::new(
+                    400,
+                    json!({"error": "session_id_required"}),
+                ));
+            };
+
+            let after = query_value(query, "after")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(0);
+            let limit = query_value(query, "limit")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(200);
+
+            let registry = lock_registry(state)?;
+            let logs = registry
+                .list_agent_session_logs(session_id, after, limit)
+                .map_err(|error| error.to_string())?;
+
+            Ok(ApiResponse::ok(json!({
+                "session_id": session_id,
+                "logs": logs
+            })))
+        }
+
+        ("POST", "/v1/pairing/challenges") => {
+            require_loopback(peer_is_loopback)?;
+            create_pairing_challenge(state)
+        }
+
+        ("POST", "/v1/pairing/requests") => {
+            require_loopback(peer_is_loopback)?;
+            submit_pairing_request(request, state)
+        }
+
+        ("GET", "/v1/pairing/requests") => {
+            require_loopback(peer_is_loopback)?;
+            let pending_only = !query_flag(query, "all");
+            let registry = lock_registry(state)?;
+            let requests = registry
+                .list_pairing_requests(pending_only)
+                .map_err(|error| error.to_string())?;
+            Ok(ApiResponse::ok(json!({"requests": requests})))
+        }
+
+        ("POST", "/v1/pairing/requests/approve") => {
+            require_loopback(peer_is_loopback)?;
+            decide_pairing_request(request, state, true)
+        }
+
+        ("POST", "/v1/pairing/requests/deny") => {
+            require_loopback(peer_is_loopback)?;
+            decide_pairing_request(request, state, false)
+        }
+
+        ("GET", "/v1/paired-devices") => {
+            require_loopback(peer_is_loopback)?;
+            let registry = lock_registry(state)?;
+            let devices = registry
+                .list_paired_devices(query_flag(query, "all"))
+                .map_err(|error| error.to_string())?;
+            Ok(ApiResponse::ok(json!({"devices": devices})))
+        }
+
+        ("POST", "/v1/paired-devices/revoke") => {
+            require_loopback(peer_is_loopback)?;
+            revoke_paired_device(request, state)
+        }
+
+        ("POST", "/v1/remote/auth/challenges") => {
+            require_loopback(peer_is_loopback)?;
+            create_remote_auth_challenge(request, state)
+        }
+
+        ("POST", "/v1/remote/auth/prove") => {
+            require_loopback(peer_is_loopback)?;
+            prove_remote_auth(request, state)
+        }
+
+        ("GET", "/v1/remote/capabilities") => Ok(ApiResponse::ok(json!({
+            "enabled": state.relay.enabled,
+            "transport": if state.relay.enabled {
+                "outbound_wss_read_only"
+            } else {
+                "disabled"
+            },
+            "device_proof": "ed25519_bootstrap_ready_loopback_only",
+            "transport_session_state": "durable_replay_protection_ready",
+            "reconnect": "fresh_epoch_required",
+            "approvals": "parameter_bound_one_shot_ready",
+            "pairing": "local_approval_ready",
+            "capabilities": remote_capabilities(),
+            "safety": {
+                "generic_shell": false,
+                "generic_process_control": false,
+                "daemon_default_bind": DEFAULT_BIND
+            }
+        }))),
 
         ("GET", "/v1/events") => {
             let after = query_value(query, "after")
@@ -362,10 +510,7 @@ fn route_api(
 
         ("POST", "/v1/ports/release") => release_port(request, state),
 
-        ("GET" | "POST", _) => Ok(ApiResponse::new(
-            404,
-            json!({"error": "not_found"}),
-        )),
+        ("GET" | "POST", _) => Ok(ApiResponse::new(404, json!({"error": "not_found"}))),
 
         _ => Ok(ApiResponse::new(
             405,
@@ -374,10 +519,373 @@ fn route_api(
     }
 }
 
-fn preview_response(
-    query: &str,
+fn require_loopback(peer_is_loopback: bool) -> Result<(), String> {
+    if peer_is_loopback {
+        Ok(())
+    } else {
+        Err("pairing administration is restricted to loopback clients".to_string())
+    }
+}
+
+fn create_pairing_challenge(state: &DaemonState) -> Result<ApiResponse, String> {
+    let created_at_ms = now_ms();
+    let expires_at_ms = created_at_ms.saturating_add(PAIRING_CHALLENGE_TTL_MS);
+    let challenge_id = format!("pc_{}", random_hex(16));
+    let secret = random_hex(32);
+    let secret_hash = sha256_hex(&secret);
+
+    let mut registry = lock_registry(state)?;
+    let challenge = registry
+        .create_pairing_challenge(&challenge_id, &secret_hash, created_at_ms, expires_at_ms)
+        .map_err(|error| error.to_string())?;
+
+    Ok(ApiResponse::new(
+        201,
+        json!({
+            "challenge": challenge,
+            "secret": secret,
+            "one_time": true,
+            "requires_local_approval": true
+        }),
+    ))
+}
+
+fn submit_pairing_request(
+    request: &http::HttpRequest,
     state: &DaemonState,
 ) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+
+    let Some(challenge_id) = valid_json_string(&body, "challenge_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_challenge_id_required"}),
+        ));
+    };
+    let Some(secret) = valid_json_string(&body, "secret", 256) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_secret_required"}),
+        ));
+    };
+    let Some(device_name) = valid_json_string(&body, "device_name", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_name_required"}),
+        ));
+    };
+    let Some(device_public_key) = valid_json_string(&body, "device_public_key", 4096) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_public_key_required"}),
+        ));
+    };
+    if !remote_auth::is_supported_device_public_key(device_public_key) {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "ed25519_device_public_key_required"}),
+        ));
+    }
+
+    let mut registry = lock_registry(state)?;
+    match registry.submit_pairing_request(
+        challenge_id,
+        &sha256_hex(secret),
+        device_name,
+        device_public_key,
+        now_ms(),
+    ) {
+        Ok(pairing_request) => Ok(ApiResponse::new(
+            202,
+            json!({
+                "request": pairing_request,
+                "approved": false,
+                "requires_local_approval": true
+            }),
+        )),
+        Err(error) => pairing_registry_error(error),
+    }
+}
+
+fn decide_pairing_request(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+    approve: bool,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+    let Some(request_id) = valid_json_string(&body, "request_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_request_id_required"}),
+        ));
+    };
+
+    let mut registry = lock_registry(state)?;
+    if approve {
+        match registry.approve_pairing_request(request_id, now_ms()) {
+            Ok(device) => Ok(ApiResponse::ok(json!({
+                "approved": true,
+                "device": device
+            }))),
+            Err(error) => pairing_registry_error(error),
+        }
+    } else {
+        match registry.deny_pairing_request(request_id, now_ms()) {
+            Ok(pairing_request) => Ok(ApiResponse::ok(json!({
+                "approved": false,
+                "request": pairing_request
+            }))),
+            Err(error) => pairing_registry_error(error),
+        }
+    }
+}
+
+fn revoke_paired_device(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+    let Some(device_id) = valid_json_string(&body, "device_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_id_required"}),
+        ));
+    };
+
+    let mut registry = lock_registry(state)?;
+    match registry.revoke_paired_device(device_id, now_ms()) {
+        Ok(device) => Ok(ApiResponse::ok(json!({
+            "revoked": true,
+            "device": device
+        }))),
+        Err(error) => pairing_registry_error(error),
+    }
+}
+
+fn create_remote_auth_challenge(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let body = match parse_json_body(request) {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_json", "message": error}),
+            ));
+        }
+    };
+    let Some(device_id) = valid_json_string(&body, "device_id", 128) else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({"error": "valid_device_id_required"}),
+        ));
+    };
+
+    let issued_at_ms = now_ms();
+    let expires_at_ms = issued_at_ms.saturating_add(REMOTE_AUTH_CHALLENGE_TTL_MS);
+    let challenge_id = format!("rac_{}", random_hex(16));
+    let server_nonce = random_hex(32);
+
+    let mut registry = lock_registry(state)?;
+    let public_key = match registry.paired_device_public_key(device_id) {
+        Ok(public_key) => public_key,
+        Err(error) => return remote_registry_error(error),
+    };
+    if !remote_auth::is_supported_device_public_key(&public_key) {
+        return Ok(ApiResponse::new(
+            409,
+            json!({"error": "paired_device_key_format_unsupported"}),
+        ));
+    }
+
+    match registry.create_remote_auth_challenge(
+        &challenge_id,
+        device_id,
+        &server_nonce,
+        issued_at_ms,
+        expires_at_ms,
+    ) {
+        Ok(record) => Ok(ApiResponse::new(
+            201,
+            json!({
+                "challenge": RemoteAuthChallenge {
+                    protocol_version: REMOTE_PROTOCOL_VERSION,
+                    device_id: record.device_id,
+                    challenge_id: record.id,
+                    server_nonce: record.server_nonce,
+                    issued_at_ms: record.issued_at_ms,
+                    expires_at_ms: record.expires_at_ms,
+                }
+            }),
+        )),
+        Err(error) => remote_registry_error(error),
+    }
+}
+
+fn prove_remote_auth(
+    request: &http::HttpRequest,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let proof: RemoteAuthProof = match serde_json::from_slice(&request.body) {
+        Ok(proof) => proof,
+        Err(error) => {
+            return Ok(ApiResponse::new(
+                400,
+                json!({"error": "invalid_remote_auth_proof", "message": error.to_string()}),
+            ));
+        }
+    };
+    let observed_at_ms = now_ms();
+
+    let mut registry = lock_registry(state)?;
+    let challenge_record =
+        match registry.load_remote_auth_challenge(&proof.challenge_id, observed_at_ms) {
+            Ok(challenge) => challenge,
+            Err(error) => return remote_registry_error(error),
+        };
+    let challenge = RemoteAuthChallenge {
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        device_id: challenge_record.device_id.clone(),
+        challenge_id: challenge_record.id.clone(),
+        server_nonce: challenge_record.server_nonce.clone(),
+        issued_at_ms: challenge_record.issued_at_ms,
+        expires_at_ms: challenge_record.expires_at_ms,
+    };
+    let public_key = match registry.paired_device_public_key(&challenge.device_id) {
+        Ok(public_key) => public_key,
+        Err(error) => return remote_registry_error(error),
+    };
+
+    if let Err(error) = remote_auth::verify_device_proof(&public_key, &challenge, &proof) {
+        return Ok(ApiResponse::new(
+            401,
+            json!({"error": "remote_auth_proof_rejected", "message": error.to_string()}),
+        ));
+    }
+
+    if let Err(error) = registry.consume_remote_auth_challenge(
+        &challenge.challenge_id,
+        &challenge.device_id,
+        &challenge.server_nonce,
+        observed_at_ms,
+    ) {
+        return remote_registry_error(error);
+    }
+
+    let transport_session_id = format!("rts_{}", random_hex(16));
+    let epoch = format!("epoch_{}", random_hex(16));
+    let expires_at_ms = observed_at_ms.saturating_add(REMOTE_TRANSPORT_SESSION_TTL_MS);
+
+    match registry.open_remote_transport_session(
+        &transport_session_id,
+        &challenge.device_id,
+        &epoch,
+        observed_at_ms,
+        expires_at_ms,
+    ) {
+        Ok(session) => Ok(ApiResponse::new(
+            201,
+            json!({
+                "authenticated": true,
+                "session": session,
+                "remote_transport_enabled": false
+            }),
+        )),
+        Err(error) => remote_registry_error(error),
+    }
+}
+
+fn remote_registry_error(error: RemoteRegistryError) -> Result<ApiResponse, String> {
+    let response = match error {
+        RemoteRegistryError::DeviceUnavailable
+        | RemoteRegistryError::AuthChallengeNotFound
+        | RemoteRegistryError::SessionNotFound
+        | RemoteRegistryError::ApprovalNotFound
+        | RemoteRegistryError::TargetSessionNotFound => {
+            ApiResponse::new(404, json!({"error": error.to_string()}))
+        }
+        RemoteRegistryError::AuthChallengeUnavailable
+        | RemoteRegistryError::AuthChallengeBindingMismatch
+        | RemoteRegistryError::SessionUnavailable
+        | RemoteRegistryError::EpochMismatch
+        | RemoteRegistryError::ReplayDetected
+        | RemoteRegistryError::SequenceOverflow
+        | RemoteRegistryError::ApprovalUnavailable
+        | RemoteRegistryError::ApprovalBindingMismatch => {
+            ApiResponse::new(409, json!({"error": error.to_string()}))
+        }
+        RemoteRegistryError::Sql(error) => return Err(error.to_string()),
+    };
+    Ok(response)
+}
+
+fn pairing_registry_error(error: RegistryError) -> Result<ApiResponse, String> {
+    let response = match error {
+        RegistryError::PairingChallengeNotFound
+        | RegistryError::PairingRequestNotFound
+        | RegistryError::PairedDeviceNotFound => {
+            ApiResponse::new(404, json!({"error": error.to_string()}))
+        }
+        RegistryError::InvalidPairingSecret => {
+            ApiResponse::new(401, json!({"error": error.to_string()}))
+        }
+        RegistryError::PairingChallengeExpired
+        | RegistryError::PairingChallengeConsumed
+        | RegistryError::PairingChallengeLocked
+        | RegistryError::PairingRequestNotPending => {
+            ApiResponse::new(409, json!({"error": error.to_string()}))
+        }
+        other => return Err(other.to_string()),
+    };
+    Ok(response)
+}
+
+fn valid_json_string<'a>(body: &'a Value, key: &str, max_len: usize) -> Option<&'a str> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= max_len)
+}
+
+fn random_hex(byte_len: usize) -> String {
+    let mut bytes = vec![0_u8; byte_len];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn sha256_hex(value: &str) -> String {
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn preview_response(query: &str, state: &DaemonState) -> Result<ApiResponse, String> {
     if !state.proxy.enabled {
         return Ok(ApiResponse::new(
             503,
@@ -436,10 +944,7 @@ fn preview_response(
     })))
 }
 
-fn reserve_port(
-    request: &http::HttpRequest,
-    state: &DaemonState,
-) -> Result<ApiResponse, String> {
+fn reserve_port(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResponse, String> {
     let body = match parse_json_body(request) {
         Ok(body) => body,
         Err(error) => {
@@ -491,10 +996,7 @@ fn reserve_port(
     ))
 }
 
-fn release_port(
-    request: &http::HttpRequest,
-    state: &DaemonState,
-) -> Result<ApiResponse, String> {
+fn release_port(request: &http::HttpRequest, state: &DaemonState) -> Result<ApiResponse, String> {
     let body = match parse_json_body(request) {
         Ok(body) => body,
         Err(error) => {
@@ -556,33 +1058,23 @@ fn release_port(
     })))
 }
 
-fn parse_json_body(
-    request: &http::HttpRequest,
-) -> Result<Value, String> {
-    serde_json::from_slice(&request.body)
-        .map_err(|error| format!("invalid JSON body: {error}"))
+fn parse_json_body(request: &http::HttpRequest) -> Result<Value, String> {
+    serde_json::from_slice(&request.body).map_err(|error| format!("invalid JSON body: {error}"))
 }
 
-fn lock_registry(
-    state: &DaemonState,
-) -> Result<std::sync::MutexGuard<'_, Registry>, String> {
+fn lock_registry(state: &DaemonState) -> Result<std::sync::MutexGuard<'_, Registry>, String> {
     state
         .registry
         .lock()
         .map_err(|_| "registry mutex poisoned".to_string())
 }
 
-fn parse_bind(
-    value: &str,
-    args: &[String],
-) -> Result<SocketAddr, String> {
+fn parse_bind(value: &str, args: &[String]) -> Result<SocketAddr, String> {
     let address: SocketAddr = value
         .parse()
         .map_err(|error| format!("invalid bind address {value}: {error}"))?;
 
-    let allow_non_loopback = args
-        .iter()
-        .any(|arg| arg == "--allow-non-loopback");
+    let allow_non_loopback = args.iter().any(|arg| arg == "--allow-non-loopback");
 
     if !address.ip().is_loopback() && !allow_non_loopback {
         return Err(format!(
@@ -594,36 +1086,23 @@ fn parse_bind(
 }
 
 fn split_target(target: &str) -> (&str, &str) {
-    target
-        .split_once('?')
-        .unwrap_or((target, ""))
+    target.split_once('?').unwrap_or((target, ""))
 }
 
-fn query_flag(
-    query: &str,
-    key: &str,
-) -> bool {
+fn query_flag(query: &str, key: &str) -> bool {
     query_value(query, key)
         .map(|value| matches!(value, "1" | "true" | "yes"))
         .unwrap_or(false)
 }
 
-fn query_value<'a>(
-    query: &'a str,
-    key: &str,
-) -> Option<&'a str> {
-    query
-        .split('&')
-        .find_map(|pair| {
-            let (candidate, value) = pair.split_once('=')?;
-            (candidate == key).then_some(value)
-        })
+fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query.split('&').find_map(|pair| {
+        let (candidate, value) = pair.split_once('=')?;
+        (candidate == key).then_some(value)
+    })
 }
 
-fn value_after(
-    args: &[String],
-    flag: &str,
-) -> Option<String> {
+fn value_after(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|arg| arg == flag)
         .and_then(|index| args.get(index + 1))
@@ -632,8 +1111,7 @@ fn value_after(
 
 fn default_db_path() -> PathBuf {
     if let Ok(home) = std::env::var("AGENTDOCK_HOME") {
-        return PathBuf::from(home)
-            .join("agentdock.db");
+        return PathBuf::from(home).join("agentdock.db");
     }
 
     let base = std::env::var_os("HOME")
@@ -641,8 +1119,7 @@ fn default_db_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    base.join(".agentdock")
-        .join("agentdock.db")
+    base.join(".agentdock").join("agentdock.db")
 }
 
 #[cfg(test)]
@@ -651,19 +1128,11 @@ mod tests {
 
     #[test]
     fn parses_event_query() {
-        let (_, query) = split_target(
-            "/v1/events?after=12&limit=50"
-        );
+        let (_, query) = split_target("/v1/events?after=12&limit=50");
 
-        assert_eq!(
-            query_value(query, "after"),
-            Some("12")
-        );
+        assert_eq!(query_value(query, "after"), Some("12"));
 
-        assert_eq!(
-            query_value(query, "limit"),
-            Some("50")
-        );
+        assert_eq!(query_value(query, "limit"), Some("50"));
     }
 
     #[test]
@@ -693,9 +1162,7 @@ mod tests {
 
         assert_eq!(
             service_socket(&service).unwrap(),
-            "127.0.0.1:3000"
-                .parse::<SocketAddr>()
-                .unwrap()
+            "127.0.0.1:3000".parse::<SocketAddr>().unwrap()
         );
     }
 }

@@ -17,4 +17,10 @@ port-manager = { path = "../port-manager" }
 process-discovery = { path = "../process-discovery" }
 project-resolver = { path = "../project-resolver" }
 framework-detection = { path = "../framework-detection" }
+serde.workspace = true
 serde_json.workspace = true
+rand.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+thiserror.workspace = true
+tungstenite.workspace = true

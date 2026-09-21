@@ -81,11 +81,7 @@ pub fn read_request(stream: &mut TcpStream) -> io::Result<HttpRequest> {
     })
 }
 
-pub fn write_json(
-    stream: &mut TcpStream,
-    status: u16,
-    body: Value,
-) -> io::Result<()> {
+pub fn write_json(stream: &mut TcpStream, status: u16, body: Value) -> io::Result<()> {
     let body = serde_json::to_vec_pretty(&body)
         .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
 
@@ -110,9 +106,7 @@ pub fn write_json(
 }
 
 fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    buffer
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 #[cfg(test)]
