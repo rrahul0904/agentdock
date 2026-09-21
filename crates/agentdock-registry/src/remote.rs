@@ -823,6 +823,61 @@ mod tests {
     }
 
     #[test]
+    fn remote_auth_challenge_is_device_bound_and_one_shot() {
+        let mut registry = Registry::in_memory().unwrap();
+        let device = pair_device(&mut registry, "auth");
+
+        registry
+            .create_remote_auth_challenge(
+                "rac_test",
+                &device.id,
+                &"11".repeat(32),
+                4_000,
+                10_000,
+            )
+            .unwrap();
+
+        let loaded = registry
+            .load_remote_auth_challenge("rac_test", 4_100)
+            .unwrap();
+        assert_eq!(loaded.device_id, device.id);
+
+        assert!(matches!(
+            registry.consume_remote_auth_challenge(
+                "rac_test",
+                &device.id,
+                &"22".repeat(32),
+                4_200,
+            ),
+            Err(RemoteRegistryError::AuthChallengeBindingMismatch)
+        ));
+
+        let consumed = registry
+            .consume_remote_auth_challenge(
+                "rac_test",
+                &device.id,
+                &"11".repeat(32),
+                4_300,
+            )
+            .unwrap();
+        assert_eq!(consumed.consumed_at_ms, Some(4_300));
+
+        assert!(matches!(
+            registry.load_remote_auth_challenge("rac_test", 4_400),
+            Err(RemoteRegistryError::AuthChallengeUnavailable)
+        ));
+        assert!(matches!(
+            registry.consume_remote_auth_challenge(
+                "rac_test",
+                &device.id,
+                &"11".repeat(32),
+                4_500,
+            ),
+            Err(RemoteRegistryError::AuthChallengeUnavailable)
+        ));
+    }
+
+    #[test]
     fn transport_rejects_replay_and_old_reconnect_epoch() {
         let mut registry = Registry::in_memory().unwrap();
         let device = pair_device(&mut registry, "transport");
