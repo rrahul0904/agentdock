@@ -18,8 +18,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Formatting (changed Rust files)
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin ${{ github.event.pull_request.base.sha }}
+          mapfile -t files < <(git diff --name-only ${{ github.event.pull_request.base.sha }} HEAD -- '*.rs')
+          if (( ${#files[@]} )); then
+            rustfmt --edition 2021 --check "${files[@]}"
+          fi
       - name: Formatting
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
         run: cargo fmt --all -- --check
       - name: Check
         run: cargo check --workspace
@@ -37,7 +46,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Build MCP server
