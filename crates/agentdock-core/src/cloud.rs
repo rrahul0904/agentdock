@@ -89,7 +89,9 @@ impl fmt::Display for CloudError {
         match self {
             Self::NotFound => write!(f, "machine not found"),
             Self::Forbidden => write!(f, "owner is not authorized for this machine"),
-            Self::IdempotencyConflict => write!(f, "idempotency key conflicts with an existing operation"),
+            Self::IdempotencyConflict => {
+                write!(f, "idempotency key conflicts with an existing operation")
+            }
             Self::InvalidTransition { from, operation } => write!(
                 f,
                 "invalid machine state transition from {from:?} for {operation:?}"
@@ -103,12 +105,24 @@ impl std::error::Error for CloudError {}
 
 pub trait ComputeProvider: Send + Sync {
     fn create_machine(&self, request: CreateMachineRequest) -> Result<MachineRecord, CloudError>;
-    fn start_machine(&self, owner_id: &str, machine_id: &str, idempotency_key: &str)
-        -> Result<MachineRecord, CloudError>;
-    fn stop_machine(&self, owner_id: &str, machine_id: &str, idempotency_key: &str)
-        -> Result<MachineRecord, CloudError>;
-    fn delete_machine(&self, owner_id: &str, machine_id: &str, idempotency_key: &str)
-        -> Result<MachineRecord, CloudError>;
+    fn start_machine(
+        &self,
+        owner_id: &str,
+        machine_id: &str,
+        idempotency_key: &str,
+    ) -> Result<MachineRecord, CloudError>;
+    fn stop_machine(
+        &self,
+        owner_id: &str,
+        machine_id: &str,
+        idempotency_key: &str,
+    ) -> Result<MachineRecord, CloudError>;
+    fn delete_machine(
+        &self,
+        owner_id: &str,
+        machine_id: &str,
+        idempotency_key: &str,
+    ) -> Result<MachineRecord, CloudError>;
     fn get_machine(&self, owner_id: &str, machine_id: &str) -> Result<MachineRecord, CloudError>;
     fn list_machines(&self, owner_id: &str) -> Result<Vec<MachineRecord>, CloudError>;
     fn append_task_event(
@@ -168,7 +182,8 @@ impl FakeComputeProvider {
         let Some(receipt) = state.operations.get(idempotency_key) else {
             return Ok(None);
         };
-        if receipt.owner_id != owner_id || receipt.machine_id != machine_id || receipt.kind != kind {
+        if receipt.owner_id != owner_id || receipt.machine_id != machine_id || receipt.kind != kind
+        {
             return Err(CloudError::IdempotencyConflict);
         }
         let machine = state.machines.get(machine_id).ok_or(CloudError::NotFound)?;
@@ -209,7 +224,10 @@ impl FakeComputeProvider {
         }
 
         let result = {
-            let machine = state.machines.get_mut(machine_id).ok_or(CloudError::NotFound)?;
+            let machine = state
+                .machines
+                .get_mut(machine_id)
+                .ok_or(CloudError::NotFound)?;
             Self::validate_owner(machine, owner_id)?;
 
             machine.state = match (kind, machine.state) {
@@ -277,7 +295,9 @@ impl ComputeProvider for FakeComputeProvider {
             generation: 1,
             failure_reason: None,
         };
-        state.machines.insert(machine.machine_id.clone(), machine.clone());
+        state
+            .machines
+            .insert(machine.machine_id.clone(), machine.clone());
         Self::record_operation(
             &mut state,
             &idempotency_key,
@@ -451,15 +471,23 @@ mod tests {
     fn lifecycle_operations_are_replay_safe() {
         let provider = FakeComputeProvider::new();
         provider.create_machine(request()).unwrap();
-        let stopped = provider.stop_machine("owner-a", "machine-1", "stop-1").unwrap();
-        let stopped_again = provider.stop_machine("owner-a", "machine-1", "stop-1").unwrap();
+        let stopped = provider
+            .stop_machine("owner-a", "machine-1", "stop-1")
+            .unwrap();
+        let stopped_again = provider
+            .stop_machine("owner-a", "machine-1", "stop-1")
+            .unwrap();
         assert_eq!(stopped, stopped_again);
         assert_eq!(stopped.state, MachineState::Stopped);
 
-        let started = provider.start_machine("owner-a", "machine-1", "start-1").unwrap();
+        let started = provider
+            .start_machine("owner-a", "machine-1", "start-1")
+            .unwrap();
         assert_eq!(started.state, MachineState::Ready);
 
-        let deleted = provider.delete_machine("owner-a", "machine-1", "delete-1").unwrap();
+        let deleted = provider
+            .delete_machine("owner-a", "machine-1", "delete-1")
+            .unwrap();
         assert_eq!(deleted.state, MachineState::Deleted);
     }
 
