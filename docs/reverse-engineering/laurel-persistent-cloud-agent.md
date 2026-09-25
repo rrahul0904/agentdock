@@ -1,9 +1,9 @@
 # Laurel donor analysis: persistent cloud computers for coding agents
 
-Status: clean-room research / architecture only  
-Tracker: RE-232  
+Status: clean-room research + Phase-A provider-neutral runtime implemented  
+Tracker: RE-233  
 Canonical destination: AgentDock  
-Source checked: 2026-09-24
+Source checked: 2026-09-24; community-feedback audit: 2026-09-24
 
 ## 1. Source and evidence boundary
 
@@ -44,6 +44,44 @@ The central product insight is not merely "remote terminal". The durable value i
 - persistent coding-agent session identity and task continuity
 - device-independent reconnection
 - a simplified alternative to manually operating a VPS
+
+
+### 2.1 Community-feedback audit and product correction
+
+A second evidence pass reviewed the launch-thread comments and related Laurel posts instead of treating the launch copy as the complete product definition.
+
+Observed feedback:
+
+- On the exact r/sideprojects launch post, a commenter challenged the premise: "This is literally built into Claude and Codex."
+- On the related r/BuildWithClaude post, commenters proposed `caffeinate` / `pmset disablesleep`, a dummy monitor, and ordinary remote access as cheaper substitutes.
+- A duplicated r/SideProject launch thread highlighted the more important unresolved concern: giving an agent a cloud machine that holds repository credentials and other secrets is the scary part.
+- The same discussion also referenced competing hosted-agent products with scoped credential vaults and isolated workers.
+- The creator's beta-testing posts ask testers specifically to verify leave/reconnect continuity, persistent files, and setup friction. That means onboarding reliability and workspace durability are part of the product hypothesis, not proven differentiators.
+
+These comments materially change the reverse-engineering target.
+
+Current Anthropic documentation confirms that Claude Code cloud sessions already run on Anthropic-managed cloud infrastructure, keep working after the laptop/browser closes, can be monitored or steered from mobile/web, and support cloud environments. Therefore AgentDock must **not** treat "keep Claude running after laptop close" as sufficient differentiation.
+
+Current OpenAI materials likewise document cloud/remote Codex workflows and durable agent/session primitives. The clean-room product must not assume that generic remote Codex execution is unique.
+
+The defensible Laurel-inspired capability is therefore:
+
+1. one **durable machine/workspace** rather than a one-task keepalive wrapper
+2. **cross-agent support** for Claude Code and Codex under one control plane
+3. persistent filesystem/repository/workspace state across tasks and reconnects
+4. low-friction provisioning compared with a manually operated VPS
+5. explicit tenant isolation, auditability, budget control, and deletion verification
+6. **scoped secret delegation** so an agent can use required repository/service credentials without receiving reusable plaintext secrets
+7. a clear migration/handoff story between local AgentDock and hosted AgentDock
+
+Product validation must compare this against:
+- Claude Code cloud sessions / routines
+- Codex cloud/remote workflows
+- local no-sleep + remote-access setups
+- generic VPS + tmux/SSH
+- hosted coding-agent workspaces
+
+Any capability already supplied by the underlying agent provider should be treated as baseline parity, not as an AgentDock differentiator.
 
 ## 3. Why Laurel belongs in AgentDock
 
@@ -1001,6 +1039,25 @@ The clean-room AgentDock version can go beyond the observed Laurel promise by ma
 - portable project/session identity
 
 This turns the Laurel capability from "host my coding agent on a VPS" into "governed persistent execution for coding agents across local and cloud machines."
+
+After the feedback audit, the sharper positioning is:
+
+> A provider-neutral, durable engineering workspace where Claude Code and Codex can share governed compute, persistent project state, scoped credentials, and reconnect-safe task history.
+
+The product should win on **durability + cross-agent control + security + lower operational friction**, not on the generic claim that an agent can keep running in the cloud.
+
+### 19.1 Feedback-derived acceptance criteria
+
+Before calling the Laurel slice meaningfully differentiated, prove:
+
+- same machine/workspace can host either Claude Code or Codex without rebuilding the environment
+- repository and uncommitted workspace state survive client disconnect and machine stop/start
+- a user can reconnect from another device and resume from the last durable event cursor
+- credential access is scoped to a tenant/workspace/runtime and can be revoked without rotating unrelated secrets
+- raw repository/provider credentials never appear in browser storage, task logs, or repository files
+- onboarding is materially simpler than manual VPS + SSH/tmux setup
+- comparison documentation explicitly states which behavior is already native to Claude/Codex and which behavior AgentDock adds
+
 
 ## 20. Production-certification boundary
 
