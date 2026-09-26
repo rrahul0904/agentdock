@@ -2,7 +2,7 @@
 
 Status: **clean-room reverse engineering / implementation pending**  
 Canonical destination: **AgentDock**  
-Issue: #undefined  
+Issue: #14  
 Research date: 2026-09-25
 
 ## 1. Evidence boundary
