@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 agentdock-core = { path = "../agentdock-core" }
 agentdock-registry = { path = "../agentdock-registry" }
+agentdock-hive = { path = "../agentdock-hive" }
 agentdock-proxy = { path = "../agentdock-proxy" }
 agent-attribution = { path = "../agent-attribution" }
 port-manager = { path = "../port-manager" }
