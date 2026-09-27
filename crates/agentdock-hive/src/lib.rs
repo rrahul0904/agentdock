@@ -214,7 +214,9 @@ impl Hive {
         let tx=self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let expired:Vec<(String,String,String,String,u32)>={
             let mut q=tx.prepare("SELECT id,floor_id,sender_agent,recipient_agent,attempt FROM hive_mailboxes WHERE state='leased' AND lease_until_ms<=?1")?;
-            q.query_map([at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?.collect::<rusqlite::Result<_>>()?
+            let rows=q.query_map([at],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+            let values=rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            values
         };
         for (id,floor,sender,recipient,attempt) in &expired {
             let dead=*attempt>=MAX_ATTEMPTS;
