@@ -1085,3 +1085,29 @@ It cannot prove:
 - real cost controls
 
 Those remain external certification gates until live evidence exists.
+
+
+## 2026-09-27 implementation update: durable local registry (Phase A.1)
+
+The existing fake provider remains in memory. A separate provider-neutral implementation,
+`DurableComputeProvider::open(path)`, now stores the fake registry as a versioned SQLite
+snapshot with serialized writers and atomic commits. The durable snapshot includes
+machine/workspace identity, operation receipts, task events, and their monotonic cursor.
+Independent handles reload the authoritative record before each operation. Repeated
+idempotency keys return the original operation state/generation, and a changed create
+specification is rejected.
+
+On restart, reconciliation validates snapshot identity, receipt ownership and event
+cursors; interrupted *local* transient states are marked Failed with an explicit
+unverified-outcome reason, not silently upgraded to Ready or Deleted. Invalid JSON,
+unsupported schema versions, and orphan/cross-owner records fail closed. Test coverage
+exercises restart recovery, independent-handle concurrency, cross-owner rejection,
+duplicate/conflicting keys, event cursor continuity, quarantining, and failed transactions.
+The CI workflow now explicitly runs the focused cloud test module alongside workspace tests.
+
+Scope limitations: this is a local fake-provider control-plane registry, not a
+provider-observed machine reconciler, task executor, persistent VM disk, deployment, or
+multi-host production database. Do not put credentials in the snapshot/event payload.
+Scoped credential brokering, real GCP provisioning, hosted relay/browser UI, external
+provider-state verification, and production readiness remain unimplemented and unclaimed.
+No exact-head GitHub Actions success should be inferred from earlier PR run #114.
