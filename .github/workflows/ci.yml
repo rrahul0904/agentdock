@@ -34,6 +34,8 @@ jobs:
         run: cargo check --workspace
       - name: Test
         run: cargo test --workspace
+      - name: Focused cloud durability and recovery tests
+        run: cargo test -p agentdock-core cloud:: -- --nocapture
 
   mcp:
     name: MCP TypeScript

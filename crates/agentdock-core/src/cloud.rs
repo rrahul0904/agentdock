@@ -82,6 +82,8 @@ pub enum CloudError {
         operation: MachineOperationKind,
     },
     LockPoisoned,
+    Storage(String),
+    CorruptRegistry(String),
 }
 
 impl fmt::Display for CloudError {
@@ -97,6 +99,8 @@ impl fmt::Display for CloudError {
                 "invalid machine state transition from {from:?} for {operation:?}"
             ),
             Self::LockPoisoned => write!(f, "provider state lock is poisoned"),
+            Self::Storage(detail) => write!(f, "cloud registry storage error: {detail}"),
+            Self::CorruptRegistry(detail) => write!(f, "cloud registry rejected: {detail}"),
         }
     }
 }
@@ -142,7 +146,7 @@ pub trait ComputeProvider: Send + Sync {
     ) -> Result<Vec<TaskEvent>, CloudError>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct FakeState {
     machines: BTreeMap<String, MachineRecord>,
     operations: BTreeMap<String, OperationReceipt>,
@@ -188,7 +192,10 @@ impl FakeComputeProvider {
         }
         let machine = state.machines.get(machine_id).ok_or(CloudError::NotFound)?;
         Self::validate_owner(machine, owner_id)?;
-        Ok(Some(machine.clone()))
+        let mut original = machine.clone();
+        original.state = receipt.final_state;
+        original.generation = receipt.generation;
+        Ok(Some(original))
     }
 
     fn record_operation(
@@ -266,6 +273,14 @@ impl ComputeProvider for FakeComputeProvider {
             &request.idempotency_key,
             MachineOperationKind::Create,
         )? {
+            // An idempotency key binds the complete immutable create specification.
+            if existing.project_id != request.project_id
+                || existing.workspace_id != request.workspace_id
+                || existing.agent_kind != request.agent_kind
+                || existing.encrypted_volume_ref != request.encrypted_volume_ref
+            {
+                return Err(CloudError::IdempotencyConflict);
+            }
             return Ok(existing);
         }
 
@@ -523,3 +538,6 @@ mod tests {
         assert_eq!(replay[0].payload, "working");
     }
 }
+
+mod persistence;
+pub use persistence::{DurableComputeProvider, ReconciliationReport};
