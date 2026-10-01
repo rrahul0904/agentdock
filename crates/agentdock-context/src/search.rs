@@ -612,6 +612,7 @@ mod tests {
         assert_eq!(result.indexed_documents, 2);
         assert_eq!(result.verdict, SearchVerdict::Strong);
 
+        drop(reopened);
         fs::remove_file(path).expect("cleanup");
     }
 
