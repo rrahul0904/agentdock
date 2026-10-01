@@ -1,8 +1,9 @@
 use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
 use agentdock_supervisor::{
-    load_snapshot, render_decisions, render_projects, render_risks, render_status,
-    render_tasks, render_workers, SupervisorSnapshot,
+    load_snapshot, new_control_request_id, render_decisions, render_projects,
+    render_risks, render_status, render_tasks, render_workers, write_control_request,
+    SupervisorControlRequest, SupervisorSnapshot,
 };
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -23,6 +24,7 @@ fn main() {
         Some("supervisor") => supervisor(&args[1..]),
         Some("console") => console(&args[1..]),
         Some("watch") => watch(&args[1..]),
+        Some("control") => control(&args[1..]),
         _ => help(),
     }
 }
@@ -324,6 +326,91 @@ fn render_watch_snapshot(snapshot: &SupervisorSnapshot) {
     }
 }
 
+fn control(args: &[String]) {
+    if !args.iter().any(|arg| arg == "--confirm") {
+        eprintln!("AgentDock control refused: explicit --confirm is required");
+        std::process::exit(2);
+    }
+    let root = match arg_value(args, "--root") {
+        Some(value) => value,
+        None => {
+            eprintln!("AgentDock control refused: missing required --root <forge-root>");
+            std::process::exit(2);
+        }
+    };
+    let action = match args.first().map(String::as_str) {
+        Some(value) => value,
+        None => {
+            eprintln!("AgentDock control refused: missing action");
+            std::process::exit(2);
+        }
+    };
+    let target = match args.get(1) {
+        Some(value) => value.clone(),
+        None => {
+            eprintln!("AgentDock control refused: missing action target");
+            std::process::exit(2);
+        }
+    };
+    let request_id = match arg_value(args, "--request-id") {
+        Some(value) => value,
+        None => match new_control_request_id() {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("AgentDock control refused: {error}");
+                std::process::exit(2);
+            }
+        },
+    };
+
+    let request = match action {
+        "pause-project" => SupervisorControlRequest::pause_project(request_id, target),
+        "resume-project" => SupervisorControlRequest::resume_project(request_id, target),
+        "set-project-priority" | "set-task-priority" => {
+            let priority = match args.get(2).and_then(|value| value.parse::<i64>().ok()) {
+                Some(value) => value,
+                None => {
+                    eprintln!(
+                        "AgentDock control refused: {action} requires an integer priority"
+                    );
+                    std::process::exit(2);
+                }
+            };
+            if action == "set-project-priority" {
+                SupervisorControlRequest::set_project_priority(request_id, target, priority)
+            } else {
+                SupervisorControlRequest::set_task_priority(request_id, target, priority)
+            }
+        }
+        other => {
+            eprintln!("AgentDock control refused: unsupported action {other}");
+            std::process::exit(2);
+        }
+    };
+
+    let request = match request {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("AgentDock control refused: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    match write_control_request(&root, &request) {
+        Ok(path) => {
+            println!("Supervisor control request queued.");
+            println!("  request_id: {}", request.request_id);
+            println!("  action: {}", request.action);
+            println!("  path: {}", path.display());
+            println!("Forge remains authoritative; the request is applied on a daemon cycle.");
+        }
+        Err(error) => {
+            eprintln!("AgentDock control refused: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn display_classification(value: &ServiceClassification) -> &'static str {
     match value {
         ServiceClassification::Development => "development",
@@ -369,5 +456,9 @@ fn help() {
     println!("  agentdock supervisor --snapshot <file> [--json]");
     println!("  agentdock console --snapshot <file>");
     println!("  agentdock watch --snapshot <file> [--interval-ms 1000]");
+    println!("  agentdock control pause-project <project-id> --root <forge-root> --confirm");
+    println!("  agentdock control resume-project <project-id> --root <forge-root> --confirm");
+    println!("  agentdock control set-project-priority <project-id> <0-100> --root <forge-root> --confirm");
+    println!("  agentdock control set-task-priority <task-id> <0-100> --root <forge-root> --confirm");
     println!("  agentdock doctor");
 }
