@@ -2,7 +2,7 @@ use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
 use agentdock_supervisor::{
     load_snapshot, render_decisions, render_projects, render_risks, render_status,
-    render_tasks, render_workers,
+    render_tasks, render_workers, SupervisorSnapshot,
 };
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -22,6 +22,7 @@ fn main() {
         Some("doctor") => doctor(),
         Some("supervisor") => supervisor(&args[1..]),
         Some("console") => console(&args[1..]),
+        Some("watch") => watch(&args[1..]),
         _ => help(),
     }
 }
@@ -255,6 +256,74 @@ fn console(args: &[String]) {
     }
 }
 
+fn arg_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == flag)
+        .and_then(|index| args.get(index + 1))
+        .cloned()
+}
+
+fn watch(args: &[String]) {
+    let path = match snapshot_path(args) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("AgentDock watch refused: {error}");
+            std::process::exit(2);
+        }
+    };
+    let interval_ms = match arg_value(args, "--interval-ms") {
+        Some(value) => match value.parse::<u64>() {
+            Ok(value) if (100..=60_000).contains(&value) => value,
+            _ => {
+                eprintln!(
+                    "AgentDock watch refused: --interval-ms must be between 100 and 60000"
+                );
+                std::process::exit(2);
+            }
+        },
+        None => 1_000,
+    };
+
+    let mut current = match load_snapshot(&path) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("AgentDock watch refused: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    println!("AgentDock Supervisor Watch");
+    println!("Snapshot: {path}");
+    println!("Polling every {interval_ms}ms; press Ctrl-C to stop.");
+    render_watch_snapshot(&current);
+
+    loop {
+        std::thread::sleep(Duration::from_millis(interval_ms));
+        match load_snapshot(&path) {
+            Ok(updated) if updated != current => {
+                current = updated;
+                println!();
+                println!("--- supervisor state changed ---");
+                render_watch_snapshot(&current);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("snapshot refresh refused: {error}");
+            }
+        }
+    }
+}
+
+fn render_watch_snapshot(snapshot: &SupervisorSnapshot) {
+    print!("{}", render_status(snapshot));
+    println!();
+    print!("{}", render_projects(snapshot));
+    if !snapshot.risks.is_empty() {
+        println!();
+        print!("{}", render_risks(snapshot));
+    }
+}
+
 fn display_classification(value: &ServiceClassification) -> &'static str {
     match value {
         ServiceClassification::Development => "development",
@@ -299,5 +368,6 @@ fn help() {
     println!("  agentdock daemon events");
     println!("  agentdock supervisor --snapshot <file> [--json]");
     println!("  agentdock console --snapshot <file>");
+    println!("  agentdock watch --snapshot <file> [--interval-ms 1000]");
     println!("  agentdock doctor");
 }
