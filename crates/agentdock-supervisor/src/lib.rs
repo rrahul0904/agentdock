@@ -414,45 +414,36 @@ impl SupervisorControlReceipt {
 
         if self.status == "refused" {
             let reason = self.reason.as_deref().ok_or_else(|| {
-                SupervisorError::Invalid(
-                    "refused receipt requires reason".into(),
-                )
+                SupervisorError::Invalid("refused receipt requires reason".into())
             })?;
             validate_text("receipt.reason", reason)?;
             return Ok(());
         }
 
-        let action = self.action.as_deref().ok_or_else(|| {
-            SupervisorError::Invalid(
-                "applied receipt requires action".into(),
-            )
-        })?;
+        let action = self
+            .action
+            .as_deref()
+            .ok_or_else(|| SupervisorError::Invalid("applied receipt requires action".into()))?;
         if !matches!(
             action,
-            "pause-project"
-                | "resume-project"
-                | "set-project-priority"
-                | "set-task-priority"
+            "pause-project" | "resume-project" | "set-project-priority" | "set-task-priority"
         ) {
             return Err(SupervisorError::Invalid(
                 "receipt has unsupported action".into(),
             ));
         }
         let entity_type = self.entity_type.as_deref().ok_or_else(|| {
-            SupervisorError::Invalid(
-                "applied receipt requires entity_type".into(),
-            )
+            SupervisorError::Invalid("applied receipt requires entity_type".into())
         })?;
         if !matches!(entity_type, "project" | "task") {
             return Err(SupervisorError::Invalid(
                 "receipt entity_type must be project or task".into(),
             ));
         }
-        let entity_id = self.entity_id.as_deref().ok_or_else(|| {
-            SupervisorError::Invalid(
-                "applied receipt requires entity_id".into(),
-            )
-        })?;
+        let entity_id = self
+            .entity_id
+            .as_deref()
+            .ok_or_else(|| SupervisorError::Invalid("applied receipt requires entity_id".into()))?;
         validate_id("receipt.entity_id", entity_id)?;
         if let Some(applied_at) = self.applied_at.as_deref() {
             validate_text("receipt.applied_at", applied_at)?;
@@ -524,9 +515,7 @@ pub fn load_control_receipts(
         }
         let receipt: SupervisorControlReceipt = serde_json::from_slice(&bytes)?;
         receipt.validate()?;
-        if path.file_stem().and_then(|value| value.to_str())
-            != Some(receipt.request_id.as_str())
-        {
+        if path.file_stem().and_then(|value| value.to_str()) != Some(receipt.request_id.as_str()) {
             return Err(SupervisorError::Invalid(
                 "receipt filename must match request_id".into(),
             ));
