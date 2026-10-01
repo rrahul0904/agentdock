@@ -1,22 +1,26 @@
-name: RE-354 Context Phase A
+name: RE-354 Context and Runtime
 
 on:
   pull_request:
     paths:
       - "crates/agentdock-context/**"
+      - "crates/agentdockd/**"
       - ".github/workflows/re354-context.yml"
       - "Cargo.toml"
   push:
     branches:
       - reverse/re-354-intentic-context-efficiency
+      - reverse/re-354-intentic-retrieval
+      - reverse/re-354-intentic-runtime-context
     paths:
       - "crates/agentdock-context/**"
+      - "crates/agentdockd/**"
       - ".github/workflows/re354-context.yml"
       - "Cargo.toml"
 
 jobs:
   context:
-    name: Context crate (${{ matrix.os }})
+    name: Context/runtime (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +34,7 @@ jobs:
       - name: Format context crate
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --package agentdock-context -- --check
-      - name: Check context crate
-        run: cargo check -p agentdock-context
-      - name: Test context crate
-        run: cargo test -p agentdock-context
+      - name: Check context and daemon
+        run: cargo check -p agentdock-context -p agentdockd
+      - name: Test context and daemon
+        run: cargo test -p agentdock-context -p agentdockd
