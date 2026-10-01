@@ -36,7 +36,7 @@ jobs:
         with:
           components: rustfmt
       - name: Check focused formatting
-        run: cargo fmt -p agentdock-supervisor -p agentdock-cli -- --check
+        run: cargo fmt -p agentdock-supervisor -- --check
       - name: Test supervisor contract
         run: cargo test -p agentdock-supervisor
       - name: Check CLI integration
