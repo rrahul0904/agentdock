@@ -1,3 +1,10 @@
+mod search;
+
+pub use search::{
+    is_indexable_path, IndexDocument, LexicalIndex, OutlineItem, OutlineResponse, ReadResponse,
+    SearchError, SearchHit, SearchOptions, SearchResponse, SearchVerdict, SEARCH_SCHEMA_VERSION,
+};
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
