@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/agentdock-core",
+  "crates/agentdock-supervisor",
   "crates/process-discovery",
   "crates/project-resolver",
   "crates/framework-detection",
