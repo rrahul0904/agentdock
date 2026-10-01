@@ -185,7 +185,10 @@ fn walk_area(
             walk_area(root, &entry.path(), depth + 1, options, state, area)?;
         } else if file_type.is_file() {
             area.files += 1;
-            *area.extensions.entry(extension_label(&entry.path())).or_insert(0) += 1;
+            *area
+                .extensions
+                .entry(extension_label(&entry.path()))
+                .or_insert(0) += 1;
         }
     }
 
@@ -199,7 +202,10 @@ fn walk_area(
 ///
 /// The map does not read file contents. Known credential/key paths, VCS internals,
 /// dependency trees, build caches and symlinks are excluded by default.
-pub fn build_workspace_map(root: impl AsRef<Path>, options: WorkspaceMapOptions) -> io::Result<WorkspaceMap> {
+pub fn build_workspace_map(
+    root: impl AsRef<Path>,
+    options: WorkspaceMapOptions,
+) -> io::Result<WorkspaceMap> {
     let root = root.as_ref();
     let workspace_name = root
         .file_name()
@@ -326,7 +332,11 @@ pub struct ContextSnapshot {
 }
 
 impl ContextSnapshot {
-    pub fn new(project_id: impl Into<String>, workspace: WorkspaceMap, facts: Vec<ResourceFact>) -> Self {
+    pub fn new(
+        project_id: impl Into<String>,
+        workspace: WorkspaceMap,
+        facts: Vec<ResourceFact>,
+    ) -> Self {
         Self {
             schema_version: CONTEXT_SCHEMA_VERSION,
             project_id: project_id.into(),
@@ -550,7 +560,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("agentdock-context-{}-{nonce}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("agentdock-context-{}-{nonce}", std::process::id()));
         fs::create_dir_all(root.join("src")).expect("src");
         fs::create_dir_all(root.join("node_modules/pkg")).expect("node_modules");
         fs::create_dir_all(root.join(".git")).expect("git");
@@ -705,7 +716,10 @@ mod tests {
 
         assert_eq!(
             receipt.validate(),
-            Err(ReceiptError::FailedToolCallsExceedTotal { failed: 2, total: 1 })
+            Err(ReceiptError::FailedToolCallsExceedTotal {
+                failed: 2,
+                total: 1
+            })
         );
     }
 
