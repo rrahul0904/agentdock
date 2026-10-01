@@ -58,6 +58,8 @@ The interactive console exposes status, projects, workers, tasks, risks, decisio
 
 The stacked Phase B control surface can also author explicit confirmed `supervisor-control/v1` requests for project pause/resume and project/task priority changes. These requests are local files only; Forge remains authoritative and applies them on its daemon cycle.
 
+The next stacked console slice adds strict `supervisor-control-receipt/v1` reads plus the same four controls directly inside `agentdock console --forge-root ...`. Interactive write requests require a trailing `confirm`, and queued requests remain explicitly pending until a Forge receipt proves the result.
+
 ## Stable localhost routing
 
 Default proxy:
