@@ -462,10 +462,11 @@ pub fn is_indexable_path(path: &str) -> bool {
         return false;
     }
 
-    if components
-        .iter()
-        .any(|component| EXCLUDED_COMPONENTS.iter().any(|item| component.eq_ignore_ascii_case(item)))
-    {
+    if components.iter().any(|component| {
+        EXCLUDED_COMPONENTS
+            .iter()
+            .any(|item| component.eq_ignore_ascii_case(item))
+    }) {
         return false;
     }
 
@@ -686,15 +687,11 @@ mod tests {
             .replace_documents(&fixture_documents())
             .expect("index documents");
 
-        let read = index
-            .read("src/context.rs", 1, 3, 64)
-            .expect("read");
+        let read = index.read("src/context.rs", 1, 3, 64).expect("read");
         assert!(read.text.contains("ContextCapsule"));
         assert!(read.end_line <= 3);
 
-        let outline = index
-            .outline("src/context.rs", 10)
-            .expect("outline");
+        let outline = index.outline("src/context.rs", 10).expect("outline");
         assert!(outline
             .items
             .iter()
