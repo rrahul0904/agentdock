@@ -1,7 +1,11 @@
 mod http;
 
 use agent_attribution::enrich_agent;
-use agentdock_core::Service;
+use agentdock_context::{
+    build_workspace_map, render_context_capsule, Confidence, ContextSnapshot, ResourceFact,
+    ResourceKind, WorkspaceMapOptions,
+};
+use agentdock_core::{LifecycleState, Service};
 use agentdock_proxy::{ProxyTarget, TargetResolver};
 use agentdock_registry::{now_ms, Registry, ServiceRecord};
 use framework_detection::enrich_service;
@@ -326,6 +330,8 @@ fn route_api(
             })))
         }
 
+        ("GET", "/v1/context") => context_response(query, state),
+
         ("GET", "/v1/routes") => {
             let registry = lock_registry(state)?;
             let routes = registry
@@ -372,6 +378,199 @@ fn route_api(
             json!({"error": "method_not_allowed"}),
         )),
     }
+}
+
+
+fn context_response(
+    query: &str,
+    state: &DaemonState,
+) -> Result<ApiResponse, String> {
+    let Some(project_id) = query_value(query, "project_id") else {
+        return Ok(ApiResponse::new(
+            400,
+            json!({
+                "error": "project_id_required"
+            }),
+        ));
+    };
+
+    let max_bytes = query_value(query, "max_bytes")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(4 * 1024)
+        .clamp(256, 32 * 1024);
+
+    let max_entries = query_value(query, "max_entries")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(2_000)
+        .clamp(100, 10_000);
+
+    let max_depth = query_value(query, "max_depth")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(5)
+        .clamp(1, 12);
+
+    let (project, services) = {
+        let registry = lock_registry(state)?;
+        let projects = registry
+            .list_projects()
+            .map_err(|error| error.to_string())?;
+
+        let Some(project) = projects
+            .into_iter()
+            .find(|project| project.id == project_id)
+        else {
+            return Ok(ApiResponse::new(
+                404,
+                json!({
+                    "error": "project_not_found"
+                }),
+            ));
+        };
+
+        let services = registry
+            .list_services(true)
+            .map_err(|error| error.to_string())?;
+
+        (project, services)
+    };
+
+    let workspace = build_workspace_map(
+        &project.identity.root,
+        WorkspaceMapOptions {
+            max_entries,
+            max_depth,
+        },
+    )
+    .map_err(|error| format!("failed to map project workspace: {error}"))?;
+
+    let facts = registry_resource_facts(
+        &project.id,
+        project.canonical_hostname.as_deref(),
+        project.identity.git_worktree,
+        &services,
+    );
+
+    let snapshot = ContextSnapshot::new(
+        project.id.clone(),
+        workspace,
+        facts,
+    );
+    let capsule = render_context_capsule(&snapshot, max_bytes);
+
+    Ok(ApiResponse::ok(json!({
+        "project_id": project.id,
+        "capsule": capsule,
+        "source": "agentdock-registry+workspace-metadata"
+    })))
+}
+
+fn registry_resource_facts(
+    project_id: &str,
+    canonical_hostname: Option<&str>,
+    git_worktree: bool,
+    services: &[ServiceRecord],
+) -> Vec<ResourceFact> {
+    let mut facts = Vec::new();
+
+    facts.push(ResourceFact {
+        kind: ResourceKind::Worktree,
+        key: "git-worktree".into(),
+        value: git_worktree.to_string(),
+        source: "agentdock-registry".into(),
+        confidence: Confidence::High,
+        priority: 220,
+        sensitive: false,
+    });
+
+    if let Some(hostname) = canonical_hostname {
+        facts.push(ResourceFact {
+            kind: ResourceKind::Runtime,
+            key: "canonical-hostname".into(),
+            value: hostname.to_string(),
+            source: "agentdock-registry".into(),
+            confidence: Confidence::High,
+            priority: 210,
+            sensitive: false,
+        });
+    }
+
+    let mut project_services = services
+        .iter()
+        .filter(|record| {
+            record.project_id.as_deref() == Some(project_id)
+                && record.state == LifecycleState::Active
+        })
+        .collect::<Vec<_>>();
+    project_services.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let omitted = project_services.len().saturating_sub(128);
+
+    for record in project_services.into_iter().take(128) {
+        let prefix = format!("service.{}", record.id);
+
+        facts.push(ResourceFact {
+            kind: ResourceKind::Port,
+            key: format!("{prefix}.port"),
+            value: record.service.port.to_string(),
+            source: "agentdock-registry".into(),
+            confidence: Confidence::High,
+            priority: 240,
+            sensitive: false,
+        });
+        facts.push(ResourceFact {
+            kind: ResourceKind::Service,
+            key: format!("{prefix}.protocol"),
+            value: format!("{:?}", record.service.protocol),
+            source: "agentdock-registry".into(),
+            confidence: Confidence::High,
+            priority: 200,
+            sensitive: false,
+        });
+        facts.push(ResourceFact {
+            kind: ResourceKind::Service,
+            key: format!("{prefix}.framework"),
+            value: format!("{:?}", record.service.framework),
+            source: "agentdock-registry".into(),
+            confidence: Confidence::High,
+            priority: 190,
+            sensitive: false,
+        });
+        facts.push(ResourceFact {
+            kind: ResourceKind::Service,
+            key: format!("{prefix}.classification"),
+            value: format!("{:?}", record.service.classification),
+            source: "agentdock-registry".into(),
+            confidence: Confidence::High,
+            priority: 180,
+            sensitive: false,
+        });
+
+        if let Some(agent) = record.service.agent.as_ref() {
+            facts.push(ResourceFact {
+                kind: ResourceKind::Tool,
+                key: format!("{prefix}.agent-kind"),
+                value: format!("{:?}", agent.kind),
+                source: "agentdock-registry".into(),
+                confidence: Confidence::High,
+                priority: 170,
+                sensitive: false,
+            });
+        }
+    }
+
+    if omitted > 0 {
+        facts.push(ResourceFact {
+            kind: ResourceKind::Note,
+            key: "services-omitted".into(),
+            value: omitted.to_string(),
+            source: "agentdock-registry".into(),
+            confidence: Confidence::High,
+            priority: 10,
+            sensitive: false,
+        });
+    }
+
+    facts
 }
 
 fn preview_response(
@@ -664,6 +863,92 @@ mod tests {
             query_value(query, "limit"),
             Some("50")
         );
+    }
+
+
+    #[test]
+    fn context_api_uses_registry_facts_without_sensitive_files() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "agentdock-context-api-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("src")).expect("src");
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname='fixture'\n")
+            .expect("cargo");
+        std::fs::write(root.join("src/lib.rs"), "pub fn fixture() {}")
+            .expect("source");
+        std::fs::write(root.join(".env"), "API_KEY=never-render")
+            .expect("env");
+
+        let project = agentdock_core::ProjectIdentity {
+            name: "context-fixture".into(),
+            root: root.clone(),
+            git_root: None,
+            git_worktree: true,
+        };
+        let service = agentdock_core::Service {
+            pid: Some(1234),
+            port: 4321,
+            protocol: agentdock_core::Protocol::Tcp,
+            bind_address: Some("127.0.0.1".into()),
+            command: Some("ignored-sensitive-command".into()),
+            command_line: Some("ignored --token never-render".into()),
+            working_directory: Some(root.clone()),
+            project: Some(project),
+            framework: agentdock_core::Framework::Vite,
+            container: None,
+            agent: Some(agentdock_core::AgentIdentity {
+                kind: agentdock_core::AgentKind::Codex,
+                session_id: Some("session-not-exported".into()),
+            }),
+            classification: agentdock_core::ServiceClassification::Development,
+        };
+
+        let mut registry = Registry::in_memory().expect("registry");
+        registry
+            .reconcile(&[service], 100)
+            .expect("reconcile");
+        let project_id = registry
+            .list_projects()
+            .expect("projects")
+            .into_iter()
+            .next()
+            .expect("project")
+            .id;
+
+        let state = DaemonState {
+            registry: Arc::new(Mutex::new(registry)),
+            ports: Arc::new(Mutex::new(PortManager::default())),
+            proxy: ProxyRuntime {
+                enabled: false,
+                bind: "127.0.0.1:7777".parse().expect("bind"),
+            },
+        };
+        let request = http::HttpRequest {
+            method: "GET".into(),
+            target: format!("/v1/context?project_id={project_id}&max_bytes=4096"),
+            body: Vec::new(),
+        };
+
+        let response = route_api(&request, &state).expect("context response");
+        assert_eq!(response.status, 200);
+
+        let text = response.body["capsule"]["text"]
+            .as_str()
+            .expect("capsule text");
+        assert!(text.contains("4321"));
+        assert!(text.contains("Vite"));
+        assert!(text.contains("Codex"));
+        assert!(!text.contains(".env"));
+        assert!(!text.contains("never-render"));
+        assert!(!text.contains("session-not-exported"));
+        assert!(!text.contains("ignored-sensitive-command"));
+
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
