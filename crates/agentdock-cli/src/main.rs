@@ -1,5 +1,9 @@
 use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
+use agentdock_supervisor::{
+    load_snapshot, render_decisions, render_projects, render_risks, render_status,
+    render_tasks, render_workers, SupervisorSnapshot,
+};
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
 use project_resolver::resolve_project;
@@ -16,6 +20,8 @@ fn main() {
         Some("scan") => scan(&args[1..]),
         Some("daemon") => daemon(&args[1..]),
         Some("doctor") => doctor(),
+        Some("supervisor") => supervisor(&args[1..]),
+        Some("console") => console(&args[1..]),
         _ => help(),
     }
 }
@@ -132,6 +138,123 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
     Ok(body.to_string())
 }
 
+fn snapshot_path(args: &[String]) -> Result<String, String> {
+    let index = args
+        .iter()
+        .position(|arg| arg == "--snapshot")
+        .ok_or_else(|| "missing required --snapshot <file>".to_string())?;
+    args.get(index + 1)
+        .cloned()
+        .ok_or_else(|| "missing value after --snapshot".to_string())
+}
+
+fn supervisor(args: &[String]) {
+    let path = match snapshot_path(args) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("AgentDock supervisor refused: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    match load_snapshot(&path) {
+        Ok(snapshot) => {
+            if args.iter().any(|arg| arg == "--json") {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshot).expect("serialize snapshot")
+                );
+                return;
+            }
+
+            print!("{}", render_status(&snapshot));
+            println!();
+            print!("{}", render_projects(&snapshot));
+            println!();
+            print!("{}", render_workers(&snapshot));
+            println!();
+            print!("{}", render_risks(&snapshot));
+            println!();
+            print!("{}", render_decisions(&snapshot));
+        }
+        Err(error) => {
+            eprintln!("AgentDock supervisor refused: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn console(args: &[String]) {
+    let path = match snapshot_path(args) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("AgentDock console refused: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    let mut snapshot = match load_snapshot(&path) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("AgentDock console refused: {error}");
+            std::process::exit(2);
+        }
+    };
+
+    println!("AgentDock Supervisor Console");
+    println!("Snapshot: {path}");
+    println!("Type 'help' for commands.");
+    print!("{}", render_status(&snapshot));
+
+    loop {
+        print!("agentdock> ");
+        if std::io::stdout().flush().is_err() {
+            break;
+        }
+
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("console input failed: {error}");
+                break;
+            }
+        }
+
+        match line.trim() {
+            "" => {}
+            "status" => print!("{}", render_status(&snapshot)),
+            "projects" => print!("{}", render_projects(&snapshot)),
+            "workers" => print!("{}", render_workers(&snapshot)),
+            "tasks" => print!("{}", render_tasks(&snapshot)),
+            "risks" => print!("{}", render_risks(&snapshot)),
+            "decisions" => print!("{}", render_decisions(&snapshot)),
+            "refresh" => match load_snapshot(&path) {
+                Ok(updated) => {
+                    snapshot = updated;
+                    println!("snapshot refreshed");
+                    print!("{}", render_status(&snapshot));
+                }
+                Err(error) => eprintln!("refresh refused: {error}"),
+            },
+            "help" => {
+                println!("Commands:");
+                println!("  status     supervisor and machine summary");
+                println!("  projects   portfolio projects and next actions");
+                println!("  workers    active/configured worker state");
+                println!("  tasks      task queue and blockers");
+                println!("  risks      current supervisor risks");
+                println!("  decisions  recent supervisor decisions");
+                println!("  refresh    reload the snapshot file");
+                println!("  quit       exit the console");
+            }
+            "quit" | "exit" => break,
+            other => eprintln!("unknown console command: {other}"),
+        }
+    }
+}
+
 fn display_classification(value: &ServiceClassification) -> &'static str {
     match value {
         ServiceClassification::Development => "development",
@@ -174,5 +297,7 @@ fn help() {
     println!("  agentdock daemon projects");
     println!("  agentdock daemon routes");
     println!("  agentdock daemon events");
+    println!("  agentdock supervisor --snapshot <file> [--json]");
+    println!("  agentdock console --snapshot <file>");
     println!("  agentdock doctor");
 }
