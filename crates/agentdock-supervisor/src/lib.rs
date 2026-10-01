@@ -261,11 +261,8 @@ impl SupervisorSnapshot {
     }
 
     pub fn normalized(mut self) -> Self {
-        self.projects.sort_by(|a, b| {
-            a.priority
-                .cmp(&b.priority)
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        self.projects
+            .sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
         self.workers.sort_by(|a, b| a.id.cmp(&b.id));
         self.tasks.sort_by(|a, b| {
             a.priority
@@ -287,9 +284,7 @@ impl SupervisorSnapshot {
 pub fn load_snapshot(path: impl AsRef<Path>) -> Result<SupervisorSnapshot, SupervisorError> {
     let bytes = fs::read(path)?;
     if bytes.len() > 8 * 1024 * 1024 {
-        return Err(SupervisorError::Invalid(
-            "snapshot exceeds 8 MiB".into(),
-        ));
+        return Err(SupervisorError::Invalid("snapshot exceeds 8 MiB".into()));
     }
     let snapshot: SupervisorSnapshot = serde_json::from_slice(&bytes)?;
     snapshot.validate()?;
@@ -322,7 +317,11 @@ pub fn render_status(snapshot: &SupervisorSnapshot) -> String {
     out.push_str("AgentDock Supervisor\n");
     out.push_str(&format!("  state: {}\n", snapshot.supervisor_state));
     out.push_str(&format!("  projects: {}\n", snapshot.projects.len()));
-    out.push_str(&format!("  workers: {} (running {})\n", snapshot.workers.len(), running));
+    out.push_str(&format!(
+        "  workers: {} (running {})\n",
+        snapshot.workers.len(),
+        running
+    ));
     out.push_str(&format!(
         "  tasks: {} (ready {}, blocked {})\n",
         snapshot.tasks.len(),
