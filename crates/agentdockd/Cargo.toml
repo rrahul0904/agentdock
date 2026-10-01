@@ -9,6 +9,7 @@ name = "agentdockd"
 path = "src/main.rs"
 
 [dependencies]
+agentdock-context = { path = "../agentdock-context" }
 agentdock-core = { path = "../agentdock-core" }
 agentdock-registry = { path = "../agentdock-registry" }
 agentdock-proxy = { path = "../agentdock-proxy" }
