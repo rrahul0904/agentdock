@@ -51,9 +51,10 @@ Run the read-only Supervisor Console from a versioned snapshot:
 ~~~bash
 cargo run -p agentdock-cli -- supervisor --snapshot docs/examples/supervisor.snapshot.example.json
 cargo run -p agentdock-cli -- console --snapshot docs/examples/supervisor.snapshot.example.json
+cargo run -p agentdock-cli -- watch --snapshot /path/to/autonomous-forge/.ai/supervisor/snapshot.json
 ~~~
 
-The interactive console exposes status, projects, workers, tasks, risks, decisions, and snapshot refresh. See `docs/SUPERVISOR_CONSOLE.md`.
+The interactive console exposes status, projects, workers, tasks, risks, decisions, and snapshot refresh. Watch mode automatically prints validated state changes published by Autonomous Forge. See `docs/SUPERVISOR_CONSOLE.md`.
 
 ## Stable localhost routing
 
