@@ -2,7 +2,7 @@ use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
 use agentdock_supervisor::{
     load_snapshot, render_decisions, render_projects, render_risks, render_status,
-    render_tasks, render_workers, SupervisorSnapshot,
+    render_tasks, render_workers,
 };
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
