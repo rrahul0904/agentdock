@@ -1,0 +1,112 @@
+{
+  "schema_version": "supervisor-snapshot/v1",
+  "generated_at": "2026-10-01T20:15:00Z",
+  "supervisor_state": "running",
+  "projects": [
+    {
+      "id": "applyai",
+      "name": "ApplyAI",
+      "repo": "rrahul0904/applyai",
+      "priority": 1,
+      "status": "blocked",
+      "next_action": "Resolve operator configuration and complete hosted acceptance",
+      "blocker": "operator_configured=false"
+    },
+    {
+      "id": "earth",
+      "name": "Earth Project",
+      "repo": "rrahul0904/earth-reference-rebuild",
+      "priority": 2,
+      "status": "active",
+      "next_action": "Use hosted CI/Vercel preview; keep local browser loops bounded",
+      "blocker": null
+    },
+    {
+      "id": "syntheticforge",
+      "name": "AI Test Data Creator",
+      "repo": "rrahul0904/syntheticforge-ai",
+      "priority": 3,
+      "status": "active",
+      "next_action": "Continue bounded local-first verification",
+      "blocker": null
+    }
+  ],
+  "workers": [
+    {
+      "id": "coder-a",
+      "kind": "implement",
+      "status": "running",
+      "project_id": "earth",
+      "task_id": "EARTH-DEPLOY"
+    },
+    {
+      "id": "coder-b",
+      "kind": "repair",
+      "status": "idle",
+      "project_id": null,
+      "task_id": null
+    }
+  ],
+  "tasks": [
+    {
+      "id": "APPLYAI-READY",
+      "project_id": "applyai",
+      "title": "Resolve hosted production readiness",
+      "kind": "repair",
+      "status": "blocked",
+      "priority": 1,
+      "blocker": "operator configuration and live acceptance evidence"
+    },
+    {
+      "id": "EARTH-DEPLOY",
+      "project_id": "earth",
+      "title": "Verify hosted preview from exact candidate SHA",
+      "kind": "implement",
+      "status": "running",
+      "priority": 1,
+      "blocker": null
+    }
+  ],
+  "risks": [
+    {
+      "severity": "high",
+      "code": "machine-pressure",
+      "message": "Avoid overlapping Docker, Playwright and heavy local test workloads.",
+      "project_id": "earth"
+    },
+    {
+      "severity": "medium",
+      "code": "deployment-access",
+      "message": "Some hosted deployment steps still require authenticated provider access.",
+      "project_id": "applyai"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D-001",
+      "action": "prefer-hosted-verification",
+      "reason": "Web-first projects should use hosted CI/preview and stop long-lived local workloads after bounded checks.",
+      "project_id": "earth",
+      "task_id": "EARTH-DEPLOY"
+    },
+    {
+      "id": "D-002",
+      "action": "preserve-local-first-exception",
+      "reason": "AI Test Data Creator is explicitly exempt from the default web-first deployment rule.",
+      "project_id": "syntheticforge",
+      "task_id": null
+    }
+  ],
+  "machine": {
+    "pressure": "high",
+    "reasons": [
+      "high_swap_usage",
+      "cpu_speed_limited"
+    ],
+    "load_average_1m": 104,
+    "cpu_speed_limit_percent": 93,
+    "memory_used_mb": 15000,
+    "memory_total_mb": 16384,
+    "swap_used_mb": 7200
+  }
+}
