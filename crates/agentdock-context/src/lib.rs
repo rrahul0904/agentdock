@@ -268,7 +268,10 @@ pub fn build_workspace_map(
             walk_area(root, &entry.path(), 1, options, &mut state, &mut area)?;
         } else if file_type.is_file() {
             area.files = 1;
-            *area.extensions.entry(extension_label(&entry.path())).or_insert(0) += 1;
+            *area
+                .extensions
+                .entry(extension_label(&entry.path()))
+                .or_insert(0) += 1;
             if MARKERS.iter().any(|marker| name == *marker) {
                 area.markers.push(name);
             }
