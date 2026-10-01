@@ -56,6 +56,8 @@ cargo run -p agentdock-cli -- watch --snapshot /path/to/autonomous-forge/.ai/sup
 
 The interactive console exposes status, projects, workers, tasks, risks, decisions, and snapshot refresh. Watch mode automatically prints validated state changes published by Autonomous Forge. See `docs/SUPERVISOR_CONSOLE.md`.
 
+The stacked Phase B control surface can also author explicit confirmed `supervisor-control/v1` requests for project pause/resume and project/task priority changes. These requests are local files only; Forge remains authoritative and applies them on its daemon cycle.
+
 ## Stable localhost routing
 
 Default proxy:
