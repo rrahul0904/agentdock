@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::fs;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 pub const SUPERVISOR_SNAPSHOT_SCHEMA: &str = "supervisor-snapshot/v1";
+pub const SUPERVISOR_CONTROL_SCHEMA: &str = "supervisor-control/v1";
 
 const MAX_PROJECTS: usize = 2_000;
 const MAX_WORKERS: usize = 512;
@@ -15,7 +18,7 @@ const MAX_TEXT: usize = 16_000;
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
-    #[error("failed to read supervisor snapshot: {0}")]
+    #[error("supervisor I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid supervisor snapshot json: {0}")]
     Json(#[from] serde_json::Error),
@@ -108,6 +111,242 @@ pub struct MachineView {
     pub memory_used_mb: Option<f64>,
     pub memory_total_mb: Option<f64>,
     pub swap_used_mb: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorControlRequest {
+    pub schema_version: String,
+    pub request_id: String,
+    pub action: String,
+    pub project_id: Option<String>,
+    pub task_id: Option<String>,
+    pub priority: Option<i64>,
+}
+
+impl SupervisorControlRequest {
+    pub fn pause_project(request_id: String, project_id: String) -> Result<Self, SupervisorError> {
+        Self::project_action(request_id, "pause-project", project_id, None)
+    }
+
+    pub fn resume_project(request_id: String, project_id: String) -> Result<Self, SupervisorError> {
+        Self::project_action(request_id, "resume-project", project_id, None)
+    }
+
+    pub fn set_project_priority(
+        request_id: String,
+        project_id: String,
+        priority: i64,
+    ) -> Result<Self, SupervisorError> {
+        Self::project_action(request_id, "set-project-priority", project_id, Some(priority))
+    }
+
+    pub fn set_task_priority(
+        request_id: String,
+        task_id: String,
+        priority: i64,
+    ) -> Result<Self, SupervisorError> {
+        let request = Self {
+            schema_version: SUPERVISOR_CONTROL_SCHEMA.into(),
+            request_id,
+            action: "set-task-priority".into(),
+            project_id: None,
+            task_id: Some(task_id),
+            priority: Some(priority),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    fn project_action(
+        request_id: String,
+        action: &str,
+        project_id: String,
+        priority: Option<i64>,
+    ) -> Result<Self, SupervisorError> {
+        let request = Self {
+            schema_version: SUPERVISOR_CONTROL_SCHEMA.into(),
+            request_id,
+            action: action.into(),
+            project_id: Some(project_id),
+            task_id: None,
+            priority,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    pub fn validate(&self) -> Result<(), SupervisorError> {
+        if self.schema_version != SUPERVISOR_CONTROL_SCHEMA {
+            return Err(SupervisorError::Invalid(
+                "unsupported supervisor control schema".into(),
+            ));
+        }
+        validate_id("request_id", &self.request_id)?;
+        if self.request_id.len() > 112 {
+            return Err(SupervisorError::Invalid(
+                "request_id cannot exceed 112 characters".into(),
+            ));
+        }
+
+        match self.action.as_str() {
+            "pause-project" | "resume-project" => {
+                let project_id = self.project_id.as_deref().ok_or_else(|| {
+                    SupervisorError::Invalid(format!(
+                        "{} requires project_id",
+                        self.action
+                    ))
+                })?;
+                validate_id("project_id", project_id)?;
+                if self.task_id.is_some() || self.priority.is_some() {
+                    return Err(SupervisorError::Invalid(format!(
+                        "{} accepts project_id only",
+                        self.action
+                    )));
+                }
+            }
+            "set-project-priority" => {
+                let project_id = self.project_id.as_deref().ok_or_else(|| {
+                    SupervisorError::Invalid(
+                        "set-project-priority requires project_id".into(),
+                    )
+                })?;
+                validate_id("project_id", project_id)?;
+                if self.task_id.is_some() {
+                    return Err(SupervisorError::Invalid(
+                        "set-project-priority does not accept task_id".into(),
+                    ));
+                }
+                validate_control_priority(self.priority)?;
+            }
+            "set-task-priority" => {
+                let task_id = self.task_id.as_deref().ok_or_else(|| {
+                    SupervisorError::Invalid(
+                        "set-task-priority requires task_id".into(),
+                    )
+                })?;
+                validate_id("task_id", task_id)?;
+                if self.project_id.is_some() {
+                    return Err(SupervisorError::Invalid(
+                        "set-task-priority does not accept project_id".into(),
+                    ));
+                }
+                validate_control_priority(self.priority)?;
+            }
+            _ => {
+                return Err(SupervisorError::Invalid(
+                    "unsupported supervisor control action".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn new_control_request_id() -> Result<String, SupervisorError> {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| SupervisorError::Invalid("system clock is before Unix epoch".into()))?
+        .as_nanos();
+    let request_id = format!("req-{nanos:x}-{}", std::process::id());
+    validate_id("request_id", &request_id)?;
+    Ok(request_id)
+}
+
+pub fn write_control_request(
+    root: impl AsRef<Path>,
+    request: &SupervisorControlRequest,
+) -> Result<PathBuf, SupervisorError> {
+    request.validate()?;
+    let root = fs::canonicalize(root.as_ref())?;
+    if !root.is_dir() {
+        return Err(SupervisorError::Invalid(
+            "Forge root must be a directory".into(),
+        ));
+    }
+
+    let ai_dir = root.join(".ai");
+    let supervisor_dir = ai_dir.join("supervisor");
+    let request_dir = supervisor_dir.join("requests");
+    for path in [&ai_dir, &supervisor_dir, &request_dir] {
+        refuse_symlink(path)?;
+    }
+    fs::create_dir_all(&request_dir)?;
+    for path in [&ai_dir, &supervisor_dir, &request_dir] {
+        refuse_symlink(path)?;
+    }
+
+    let resolved_dir = fs::canonicalize(&request_dir)?;
+    if !resolved_dir.starts_with(&root) {
+        return Err(SupervisorError::Invalid(
+            "supervisor request directory escaped Forge root".into(),
+        ));
+    }
+
+    let final_path = resolved_dir.join(format!("{}.json", request.request_id));
+    if final_path.exists() {
+        return Err(SupervisorError::Invalid(format!(
+            "supervisor request already exists: {}",
+            request.request_id
+        )));
+    }
+
+    let encoded = serde_json::to_vec_pretty(request)?;
+    let temporary = resolved_dir.join(format!(
+        ".{}.{}.tmp",
+        request.request_id,
+        std::process::id()
+    ));
+    let result = (|| -> Result<(), SupervisorError> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(&encoded)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(&temporary, permissions)?;
+        }
+
+        drop(file);
+        fs::rename(&temporary, &final_path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(final_path)
+}
+
+fn validate_control_priority(priority: Option<i64>) -> Result<(), SupervisorError> {
+    match priority {
+        Some(value) if (0..=100).contains(&value) => Ok(()),
+        _ => Err(SupervisorError::Invalid(
+            "priority must be an integer between 0 and 100".into(),
+        )),
+    }
+}
+
+fn refuse_symlink(path: &Path) -> Result<(), SupervisorError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(SupervisorError::Invalid(
+            format!(
+                "supervisor control path must not be a symlink: {}",
+                path.display()
+            ),
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 impl SupervisorSnapshot {
@@ -548,6 +787,60 @@ mod tests {
                 swap_used_mb: Some(7_200.0),
             }),
         }
+    }
+
+    #[test]
+    fn control_request_contract_is_action_specific() {
+        let pause = SupervisorControlRequest::pause_project(
+            "req-pause".into(),
+            "applyai".into(),
+        )
+        .unwrap();
+        assert_eq!(pause.action, "pause-project");
+        assert_eq!(pause.priority, None);
+
+        let priority = SupervisorControlRequest::set_task_priority(
+            "req-task".into(),
+            "T-1".into(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(priority.priority, Some(2));
+
+        assert!(SupervisorControlRequest::set_project_priority(
+            "req-bad".into(),
+            "applyai".into(),
+            101,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn writes_control_request_only_under_supervisor_queue() {
+        let base = std::env::temp_dir().join(format!(
+            "agentdock-supervisor-control-{}",
+            new_control_request_id().unwrap()
+        ));
+        fs::create_dir_all(&base).unwrap();
+        let request = SupervisorControlRequest::pause_project(
+            "req-write".into(),
+            "applyai".into(),
+        )
+        .unwrap();
+
+        let path = write_control_request(&base, &request).unwrap();
+        assert_eq!(
+            path,
+            fs::canonicalize(&base)
+                .unwrap()
+                .join(".ai/supervisor/requests/req-write.json")
+        );
+        let loaded: SupervisorControlRequest =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded, request);
+        assert!(write_control_request(&base, &request).is_err());
+
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
