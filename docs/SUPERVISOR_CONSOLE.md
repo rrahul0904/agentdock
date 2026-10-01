@@ -27,6 +27,22 @@ cargo run -p agentdock-cli -- supervisor --snapshot docs/examples/supervisor.sna
 cargo run -p agentdock-cli -- console --snapshot docs/examples/supervisor.snapshot.example.json
 ```
 
+## Live watch
+
+When Autonomous Forge is publishing the same snapshot path after daemon lifecycle changes and cycles:
+
+```bash
+cargo run -p agentdock-cli -- watch --snapshot /path/to/autonomous-forge/.ai/supervisor/snapshot.json
+```
+
+The default poll interval is 1000ms. Override it within the bounded 100–60000ms range:
+
+```bash
+cargo run -p agentdock-cli -- watch --snapshot /path/to/snapshot.json --interval-ms 2000
+```
+
+Watch mode reloads the strict snapshot and prints only when validated supervisor state changes. Invalid or partially replaced files are refused and retried on the next poll.
+
 Commands:
 
 - `status` — supervisor, queue and machine-pressure summary
