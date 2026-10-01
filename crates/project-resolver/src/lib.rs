@@ -30,7 +30,10 @@ impl fmt::Display for WorkspaceResolveError {
             Self::EmptyWorkspace => write!(f, "workspace must contain at least one root"),
             Self::InvalidRootLimit => write!(f, "workspace root limit must be greater than zero"),
             Self::TooManyRoots { actual, max } => {
-                write!(f, "workspace contains {actual} roots but the configured limit is {max}")
+                write!(
+                    f,
+                    "workspace contains {actual} roots but the configured limit is {max}"
+                )
             }
             Self::DuplicateRoot(root) => write!(f, "workspace contains duplicate root {root}"),
         }
