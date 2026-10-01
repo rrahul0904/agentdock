@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const CONTEXT_SCHEMA_VERSION: u8 = 1;
 pub const RECEIPT_SCHEMA_VERSION: u8 = 1;
@@ -542,6 +542,7 @@ pub enum ReceiptError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_workspace() -> PathBuf {
