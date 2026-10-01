@@ -84,3 +84,36 @@ agentdock control set-task-priority RE-347 0 --root /path/to/autonomous-forge --
 AgentDock only writes a strict `supervisor-control/v1` JSON request under `.ai/supervisor/requests/`. It does not open Forge SQLite and does not execute `forge`, a shell, Git, Docker, or any target process.
 
 Forge validates and applies the request on a daemon cycle, writes a durable receipt, archives the request, and republishes the supervisor snapshot. `pause-project` stops new scheduling only; it does not terminate work already in flight.
+
+## Interactive controls and receipts
+
+Start the console with the Forge root to enable the already-bounded Phase B controls:
+
+```bash
+agentdock console \
+  --snapshot /path/to/autonomous-forge/.ai/supervisor/snapshot.json \
+  --forge-root /path/to/autonomous-forge
+```
+
+Inside the console:
+
+```text
+agentdock> receipts
+agentdock> pause applyai confirm
+agentdock> resume applyai confirm
+agentdock> project-priority applyai 1 confirm
+agentdock> task-priority RE-347 0 confirm
+```
+
+The trailing literal `confirm` is required for every interactive mutation request. The console only queues the same strict `supervisor-control/v1` files already verified in Phase B; it never reports them as applied. After Forge processes a daemon cycle, use `receipts` to inspect its authoritative `supervisor-control-receipt/v1` result.
+
+Without `--forge-root`, receipt and control commands are disabled rather than guessing a Forge location.
+
+A non-interactive receipt view is also available:
+
+```bash
+agentdock receipts --root /path/to/autonomous-forge --limit 20
+agentdock receipts --root /path/to/autonomous-forge --limit 20 --json
+```
+
+Receipt reads are bounded to 1–100 direct JSON files under `.ai/supervisor/receipts/`, refuse symlinks, cap each file at 64 KiB, require strict schemas, and require filename/request-ID agreement.
