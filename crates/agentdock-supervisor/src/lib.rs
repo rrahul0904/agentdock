@@ -565,21 +565,17 @@ pub fn render_control_receipts(receipts: &[SupervisorControlReceipt]) -> String 
             ));
         }
         if receipt.before.priority != receipt.after.priority {
-            out.push_str(&format!(
-                "  priority: {} -> {}\n",
-                receipt
-                    .before
-                    .priority
-                    .map(|value| value.to_string())
-                    .as_deref()
-                    .unwrap_or("-"),
-                receipt
-                    .after
-                    .priority
-                    .map(|value| value.to_string())
-                    .as_deref()
-                    .unwrap_or("-")
-            ));
+            let before = receipt
+                .before
+                .priority
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".into());
+            let after = receipt
+                .after
+                .priority
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".into());
+            out.push_str(&format!("  priority: {before} -> {after}\n"));
         }
     }
     out
