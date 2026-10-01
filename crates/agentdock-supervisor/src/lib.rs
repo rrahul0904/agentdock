@@ -138,7 +138,12 @@ impl SupervisorControlRequest {
         project_id: String,
         priority: i64,
     ) -> Result<Self, SupervisorError> {
-        Self::project_action(request_id, "set-project-priority", project_id, Some(priority))
+        Self::project_action(
+            request_id,
+            "set-project-priority",
+            project_id,
+            Some(priority),
+        )
     }
 
     pub fn set_task_priority(
@@ -192,10 +197,7 @@ impl SupervisorControlRequest {
         match self.action.as_str() {
             "pause-project" | "resume-project" => {
                 let project_id = self.project_id.as_deref().ok_or_else(|| {
-                    SupervisorError::Invalid(format!(
-                        "{} requires project_id",
-                        self.action
-                    ))
+                    SupervisorError::Invalid(format!("{} requires project_id", self.action))
                 })?;
                 validate_id("project_id", project_id)?;
                 if self.task_id.is_some() || self.priority.is_some() {
@@ -207,9 +209,7 @@ impl SupervisorControlRequest {
             }
             "set-project-priority" => {
                 let project_id = self.project_id.as_deref().ok_or_else(|| {
-                    SupervisorError::Invalid(
-                        "set-project-priority requires project_id".into(),
-                    )
+                    SupervisorError::Invalid("set-project-priority requires project_id".into())
                 })?;
                 validate_id("project_id", project_id)?;
                 if self.task_id.is_some() {
@@ -221,9 +221,7 @@ impl SupervisorControlRequest {
             }
             "set-task-priority" => {
                 let task_id = self.task_id.as_deref().ok_or_else(|| {
-                    SupervisorError::Invalid(
-                        "set-task-priority requires task_id".into(),
-                    )
+                    SupervisorError::Invalid("set-task-priority requires task_id".into())
                 })?;
                 validate_id("task_id", task_id)?;
                 if self.project_id.is_some() {
@@ -337,12 +335,12 @@ fn validate_control_priority(priority: Option<i64>) -> Result<(), SupervisorErro
 
 fn refuse_symlink(path: &Path) -> Result<(), SupervisorError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(SupervisorError::Invalid(
-            format!(
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(SupervisorError::Invalid(format!(
                 "supervisor control path must not be a symlink: {}",
                 path.display()
-            ),
-        )),
+            )))
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
@@ -791,20 +789,14 @@ mod tests {
 
     #[test]
     fn control_request_contract_is_action_specific() {
-        let pause = SupervisorControlRequest::pause_project(
-            "req-pause".into(),
-            "applyai".into(),
-        )
-        .unwrap();
+        let pause =
+            SupervisorControlRequest::pause_project("req-pause".into(), "applyai".into()).unwrap();
         assert_eq!(pause.action, "pause-project");
         assert_eq!(pause.priority, None);
 
-        let priority = SupervisorControlRequest::set_task_priority(
-            "req-task".into(),
-            "T-1".into(),
-            2,
-        )
-        .unwrap();
+        let priority =
+            SupervisorControlRequest::set_task_priority("req-task".into(), "T-1".into(), 2)
+                .unwrap();
         assert_eq!(priority.priority, Some(2));
 
         assert!(SupervisorControlRequest::set_project_priority(
@@ -822,11 +814,8 @@ mod tests {
             new_control_request_id().unwrap()
         ));
         fs::create_dir_all(&base).unwrap();
-        let request = SupervisorControlRequest::pause_project(
-            "req-write".into(),
-            "applyai".into(),
-        )
-        .unwrap();
+        let request =
+            SupervisorControlRequest::pause_project("req-write".into(), "applyai".into()).unwrap();
 
         let path = write_control_request(&base, &request).unwrap();
         assert_eq!(
