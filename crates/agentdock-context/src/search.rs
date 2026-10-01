@@ -457,7 +457,7 @@ pub fn is_indexable_path(path: &str) -> bool {
     let components = normalized.split('/').collect::<Vec<_>>();
     if components
         .iter()
-        .any(|component| component.is_empty() || *component == "..")
+        .any(|component| component.is_empty() || *component == ".." || component.contains(':'))
     {
         return false;
     }
@@ -473,9 +473,6 @@ pub fn is_indexable_path(path: &str) -> bool {
     let Some(file_name) = components.last() else {
         return false;
     };
-    if file_name.contains(':') {
-        return false;
-    }
 
     !is_sensitive_file_name(file_name)
 }
