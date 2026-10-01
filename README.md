@@ -46,6 +46,15 @@ Run one-shot discovery:
 cargo run -p agentdock-cli -- scan --all
 ~~~
 
+Run the read-only Supervisor Console from a versioned snapshot:
+
+~~~bash
+cargo run -p agentdock-cli -- supervisor --snapshot docs/examples/supervisor.snapshot.example.json
+cargo run -p agentdock-cli -- console --snapshot docs/examples/supervisor.snapshot.example.json
+~~~
+
+The interactive console exposes status, projects, workers, tasks, risks, decisions, and snapshot refresh. See `docs/SUPERVISOR_CONSOLE.md`.
+
 ## Stable localhost routing
 
 Default proxy:
@@ -116,6 +125,7 @@ Default database:
 ~~~text
 crates/
   agentdock-core/
+  agentdock-supervisor/
   process-discovery/
   project-resolver/
   framework-detection/
