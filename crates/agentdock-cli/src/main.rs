@@ -1,9 +1,9 @@
 use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
 use agentdock_supervisor::{
-    load_snapshot, new_control_request_id, render_decisions, render_projects,
-    render_risks, render_status, render_tasks, render_workers, write_control_request,
-    SupervisorControlRequest, SupervisorSnapshot,
+    load_control_receipts, load_snapshot, new_control_request_id, render_control_receipts,
+    render_decisions, render_projects, render_risks, render_status, render_tasks,
+    render_workers, write_control_request, SupervisorControlRequest, SupervisorSnapshot,
 };
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -25,6 +25,7 @@ fn main() {
         Some("console") => console(&args[1..]),
         Some("watch") => watch(&args[1..]),
         Some("control") => control(&args[1..]),
+        Some("receipts") => receipts(&args[1..]),
         _ => help(),
     }
 }
@@ -203,9 +204,14 @@ fn console(args: &[String]) {
             std::process::exit(2);
         }
     };
+    let forge_root = arg_value(args, "--forge-root");
 
     println!("AgentDock Supervisor Console");
     println!("Snapshot: {path}");
+    match forge_root.as_deref() {
+        Some(root) => println!("Forge root: {root}"),
+        None => println!("Forge controls: disabled (start console with --forge-root <path>)"),
+    }
     println!("Type 'help' for commands.");
     print!("{}", render_status(&snapshot));
 
@@ -225,7 +231,9 @@ fn console(args: &[String]) {
             }
         }
 
-        match line.trim() {
+        let input = line.trim();
+        let parts = input.split_whitespace().collect::<Vec<_>>();
+        match input {
             "" => {}
             "status" => print!("{}", render_status(&snapshot)),
             "projects" => print!("{}", render_projects(&snapshot)),
@@ -233,6 +241,15 @@ fn console(args: &[String]) {
             "tasks" => print!("{}", render_tasks(&snapshot)),
             "risks" => print!("{}", render_risks(&snapshot)),
             "decisions" => print!("{}", render_decisions(&snapshot)),
+            "receipts" => match forge_root.as_deref() {
+                Some(root) => match load_control_receipts(root, 20) {
+                    Ok(items) => print!("{}", render_control_receipts(&items)),
+                    Err(error) => eprintln!("receipt read refused: {error}"),
+                },
+                None => eprintln!(
+                    "receipts disabled: start console with --forge-root <path>"
+                ),
+            },
             "refresh" => match load_snapshot(&path) {
                 Ok(updated) => {
                     snapshot = updated;
@@ -249,10 +266,35 @@ fn console(args: &[String]) {
                 println!("  tasks      task queue and blockers");
                 println!("  risks      current supervisor risks");
                 println!("  decisions  recent supervisor decisions");
+                println!("  receipts   recent Forge control receipts");
                 println!("  refresh    reload the snapshot file");
+                println!("  pause <project-id> confirm");
+                println!("  resume <project-id> confirm");
+                println!("  project-priority <project-id> <0-100> confirm");
+                println!("  task-priority <task-id> <0-100> confirm");
                 println!("  quit       exit the console");
             }
             "quit" | "exit" => break,
+            _ if matches!(
+                parts.first().copied(),
+                Some("pause" | "resume" | "project-priority" | "task-priority")
+            ) => {
+                if let Some(root) = forge_root.as_deref() {
+                    match queue_console_control(root, &parts) {
+                        Ok(request_id) => {
+                            println!("Supervisor control request queued: {request_id}");
+                            println!(
+                                "Pending Forge daemon cycle; use 'receipts' to verify application."
+                            );
+                        }
+                        Err(error) => eprintln!("control refused: {error}"),
+                    }
+                } else {
+                    eprintln!(
+                        "control disabled: start console with --forge-root <path>"
+                    );
+                }
+            }
             other => eprintln!("unknown console command: {other}"),
         }
     }
@@ -326,6 +368,149 @@ fn render_watch_snapshot(snapshot: &SupervisorSnapshot) {
     }
 }
 
+fn build_control_request(
+    action: &str,
+    target: &str,
+    priority: Option<i64>,
+    request_id: String,
+) -> Result<SupervisorControlRequest, String> {
+    let result = match action {
+        "pause-project" => SupervisorControlRequest::pause_project(
+            request_id,
+            target.to_string(),
+        ),
+        "resume-project" => SupervisorControlRequest::resume_project(
+            request_id,
+            target.to_string(),
+        ),
+        "set-project-priority" => {
+            let priority = priority.ok_or_else(|| {
+                "set-project-priority requires an integer priority".to_string()
+            })?;
+            SupervisorControlRequest::set_project_priority(
+                request_id,
+                target.to_string(),
+                priority,
+            )
+        }
+        "set-task-priority" => {
+            let priority = priority.ok_or_else(|| {
+                "set-task-priority requires an integer priority".to_string()
+            })?;
+            SupervisorControlRequest::set_task_priority(
+                request_id,
+                target.to_string(),
+                priority,
+            )
+        }
+        other => return Err(format!("unsupported action {other}")),
+    };
+    result.map_err(|error| error.to_string())
+}
+
+fn queue_control_request(
+    root: &str,
+    action: &str,
+    target: &str,
+    priority: Option<i64>,
+    request_id: Option<String>,
+) -> Result<String, String> {
+    let request_id = match request_id {
+        Some(value) => value,
+        None => new_control_request_id().map_err(|error| error.to_string())?,
+    };
+    let request = build_control_request(action, target, priority, request_id)?;
+    write_control_request(root, &request).map_err(|error| error.to_string())?;
+    Ok(request.request_id)
+}
+
+fn queue_console_control(root: &str, parts: &[&str]) -> Result<String, String> {
+    let confirmed = parts.last().copied() == Some("confirm");
+    if !confirmed {
+        return Err("explicit trailing 'confirm' is required".into());
+    }
+
+    match parts {
+        ["pause", project_id, "confirm"] => queue_control_request(
+            root,
+            "pause-project",
+            project_id,
+            None,
+            None,
+        ),
+        ["resume", project_id, "confirm"] => queue_control_request(
+            root,
+            "resume-project",
+            project_id,
+            None,
+            None,
+        ),
+        ["project-priority", project_id, priority, "confirm"] => {
+            let value = priority
+                .parse::<i64>()
+                .map_err(|_| "priority must be an integer".to_string())?;
+            queue_control_request(
+                root,
+                "set-project-priority",
+                project_id,
+                Some(value),
+                None,
+            )
+        }
+        ["task-priority", task_id, priority, "confirm"] => {
+            let value = priority
+                .parse::<i64>()
+                .map_err(|_| "priority must be an integer".to_string())?;
+            queue_control_request(
+                root,
+                "set-task-priority",
+                task_id,
+                Some(value),
+                None,
+            )
+        }
+        _ => Err("invalid supervisor control command shape".into()),
+    }
+}
+
+fn receipts(args: &[String]) {
+    let root = match arg_value(args, "--root") {
+        Some(value) => value,
+        None => {
+            eprintln!("AgentDock receipts refused: missing required --root <forge-root>");
+            std::process::exit(2);
+        }
+    };
+    let limit = match arg_value(args, "--limit") {
+        Some(value) => match value.parse::<usize>() {
+            Ok(value) if (1..=100).contains(&value) => value,
+            _ => {
+                eprintln!("AgentDock receipts refused: --limit must be between 1 and 100");
+                std::process::exit(2);
+            }
+        },
+        None => 20,
+    };
+
+    match load_control_receipts(&root, limit) {
+        Ok(items) => {
+            if args.iter().any(|arg| arg == "--json") {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items)
+                        .expect("serialize supervisor control receipts")
+                );
+            } else {
+                print!("{}", render_control_receipts(&items));
+            }
+        }
+        Err(error) => {
+            eprintln!("AgentDock receipts refused: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn control(args: &[String]) {
     if !args.iter().any(|arg| arg == "--confirm") {
         eprintln!("AgentDock control refused: explicit --confirm is required");
@@ -346,63 +531,38 @@ fn control(args: &[String]) {
         }
     };
     let target = match args.get(1) {
-        Some(value) => value.clone(),
+        Some(value) => value.as_str(),
         None => {
             eprintln!("AgentDock control refused: missing action target");
             std::process::exit(2);
         }
     };
-    let request_id = match arg_value(args, "--request-id") {
-        Some(value) => value,
-        None => match new_control_request_id() {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("AgentDock control refused: {error}");
+    let priority = if matches!(action, "set-project-priority" | "set-task-priority") {
+        match args.get(2).and_then(|value| value.parse::<i64>().ok()) {
+            Some(value) => Some(value),
+            None => {
+                eprintln!(
+                    "AgentDock control refused: {action} requires an integer priority"
+                );
                 std::process::exit(2);
             }
-        },
+        }
+    } else {
+        None
     };
 
-    let request = match action {
-        "pause-project" => SupervisorControlRequest::pause_project(request_id, target),
-        "resume-project" => SupervisorControlRequest::resume_project(request_id, target),
-        "set-project-priority" | "set-task-priority" => {
-            let priority = match args.get(2).and_then(|value| value.parse::<i64>().ok()) {
-                Some(value) => value,
-                None => {
-                    eprintln!(
-                        "AgentDock control refused: {action} requires an integer priority"
-                    );
-                    std::process::exit(2);
-                }
-            };
-            if action == "set-project-priority" {
-                SupervisorControlRequest::set_project_priority(request_id, target, priority)
-            } else {
-                SupervisorControlRequest::set_task_priority(request_id, target, priority)
-            }
-        }
-        other => {
-            eprintln!("AgentDock control refused: unsupported action {other}");
-            std::process::exit(2);
-        }
-    };
-
-    let request = match request {
-        Ok(request) => request,
-        Err(error) => {
-            eprintln!("AgentDock control refused: {error}");
-            std::process::exit(2);
-        }
-    };
-
-    match write_control_request(&root, &request) {
-        Ok(path) => {
+    match queue_control_request(
+        &root,
+        action,
+        target,
+        priority,
+        arg_value(args, "--request-id"),
+    ) {
+        Ok(request_id) => {
             println!("Supervisor control request queued.");
-            println!("  request_id: {}", request.request_id);
-            println!("  action: {}", request.action);
-            println!("  path: {}", path.display());
-            println!("Forge remains authoritative; the request is applied on a daemon cycle.");
+            println!("  request_id: {request_id}");
+            println!("  action: {action}");
+            println!("Forge remains authoritative; the request is pending a daemon cycle.");
         }
         Err(error) => {
             eprintln!("AgentDock control refused: {error}");
@@ -454,11 +614,12 @@ fn help() {
     println!("  agentdock daemon routes");
     println!("  agentdock daemon events");
     println!("  agentdock supervisor --snapshot <file> [--json]");
-    println!("  agentdock console --snapshot <file>");
+    println!("  agentdock console --snapshot <file> [--forge-root <forge-root>]");
     println!("  agentdock watch --snapshot <file> [--interval-ms 1000]");
     println!("  agentdock control pause-project <project-id> --root <forge-root> --confirm");
     println!("  agentdock control resume-project <project-id> --root <forge-root> --confirm");
     println!("  agentdock control set-project-priority <project-id> <0-100> --root <forge-root> --confirm");
     println!("  agentdock control set-task-priority <task-id> <0-100> --root <forge-root> --confirm");
+    println!("  agentdock receipts --root <forge-root> [--limit 20] [--json]");
     println!("  agentdock doctor");
 }
