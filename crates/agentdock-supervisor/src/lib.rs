@@ -8,6 +8,7 @@ use thiserror::Error;
 
 pub const SUPERVISOR_SNAPSHOT_SCHEMA: &str = "supervisor-snapshot/v1";
 pub const SUPERVISOR_CONTROL_SCHEMA: &str = "supervisor-control/v1";
+pub const SUPERVISOR_CONTROL_RECEIPT_SCHEMA: &str = "supervisor-control-receipt/v1";
 
 const MAX_PROJECTS: usize = 2_000;
 const MAX_WORKERS: usize = 512;
@@ -345,6 +346,252 @@ fn refuse_symlink(path: &Path) -> Result<(), SupervisorError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorControlState {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SupervisorControlReceipt {
+    pub schema_version: String,
+    pub request_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub entity_type: Option<String>,
+    #[serde(default)]
+    pub entity_id: Option<String>,
+    #[serde(default)]
+    pub before: SupervisorControlState,
+    #[serde(default)]
+    pub after: SupervisorControlState,
+    #[serde(default)]
+    pub applied_at: Option<String>,
+    #[serde(default)]
+    pub replayed: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl SupervisorControlReceipt {
+    pub fn validate(&self) -> Result<(), SupervisorError> {
+        if self.schema_version != SUPERVISOR_CONTROL_RECEIPT_SCHEMA {
+            return Err(SupervisorError::Invalid(
+                "unsupported supervisor control receipt schema".into(),
+            ));
+        }
+        validate_id("receipt.request_id", &self.request_id)?;
+        if self.request_id.len() > 112 {
+            return Err(SupervisorError::Invalid(
+                "receipt request_id cannot exceed 112 characters".into(),
+            ));
+        }
+        if !matches!(self.status.as_str(), "applied" | "replayed" | "refused") {
+            return Err(SupervisorError::Invalid(
+                "receipt status must be applied, replayed, or refused".into(),
+            ));
+        }
+        if let Some(priority) = self.before.priority {
+            validate_receipt_priority(priority)?;
+        }
+        if let Some(priority) = self.after.priority {
+            validate_receipt_priority(priority)?;
+        }
+        if let Some(status) = self.before.status.as_deref() {
+            validate_text("receipt.before.status", status)?;
+        }
+        if let Some(status) = self.after.status.as_deref() {
+            validate_text("receipt.after.status", status)?;
+        }
+
+        if self.status == "refused" {
+            let reason = self.reason.as_deref().ok_or_else(|| {
+                SupervisorError::Invalid(
+                    "refused receipt requires reason".into(),
+                )
+            })?;
+            validate_text("receipt.reason", reason)?;
+            return Ok(());
+        }
+
+        let action = self.action.as_deref().ok_or_else(|| {
+            SupervisorError::Invalid(
+                "applied receipt requires action".into(),
+            )
+        })?;
+        if !matches!(
+            action,
+            "pause-project"
+                | "resume-project"
+                | "set-project-priority"
+                | "set-task-priority"
+        ) {
+            return Err(SupervisorError::Invalid(
+                "receipt has unsupported action".into(),
+            ));
+        }
+        let entity_type = self.entity_type.as_deref().ok_or_else(|| {
+            SupervisorError::Invalid(
+                "applied receipt requires entity_type".into(),
+            )
+        })?;
+        if !matches!(entity_type, "project" | "task") {
+            return Err(SupervisorError::Invalid(
+                "receipt entity_type must be project or task".into(),
+            ));
+        }
+        let entity_id = self.entity_id.as_deref().ok_or_else(|| {
+            SupervisorError::Invalid(
+                "applied receipt requires entity_id".into(),
+            )
+        })?;
+        validate_id("receipt.entity_id", entity_id)?;
+        if let Some(applied_at) = self.applied_at.as_deref() {
+            validate_text("receipt.applied_at", applied_at)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn load_control_receipts(
+    root: impl AsRef<Path>,
+    limit: usize,
+) -> Result<Vec<SupervisorControlReceipt>, SupervisorError> {
+    if !(1..=100).contains(&limit) {
+        return Err(SupervisorError::Invalid(
+            "receipt limit must be between 1 and 100".into(),
+        ));
+    }
+    let root = fs::canonicalize(root.as_ref())?;
+    if !root.is_dir() {
+        return Err(SupervisorError::Invalid(
+            "Forge root must be a directory".into(),
+        ));
+    }
+    let ai_dir = root.join(".ai");
+    let supervisor_dir = ai_dir.join("supervisor");
+    let receipt_dir = supervisor_dir.join("receipts");
+    for path in [&ai_dir, &supervisor_dir, &receipt_dir] {
+        refuse_symlink(path)?;
+    }
+    if !receipt_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let resolved_dir = fs::canonicalize(&receipt_dir)?;
+    if !resolved_dir.starts_with(&root) {
+        return Err(SupervisorError::Invalid(
+            "supervisor receipt directory escaped Forge root".into(),
+        ));
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&resolved_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_symlink() {
+            return Err(SupervisorError::Invalid(
+                "supervisor receipt symlinks are refused".into(),
+            ));
+        }
+        if path.extension().and_then(|value| value.to_str()) == Some("json") {
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths.reverse();
+    paths.truncate(limit);
+
+    let mut receipts = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(&path)?;
+        if bytes.len() > 64 * 1024 {
+            return Err(SupervisorError::Invalid(format!(
+                "control receipt exceeds 64 KiB: {}",
+                path.display()
+            )));
+        }
+        let receipt: SupervisorControlReceipt = serde_json::from_slice(&bytes)?;
+        receipt.validate()?;
+        if path.file_stem().and_then(|value| value.to_str())
+            != Some(receipt.request_id.as_str())
+        {
+            return Err(SupervisorError::Invalid(
+                "receipt filename must match request_id".into(),
+            ));
+        }
+        receipts.push(receipt);
+    }
+    Ok(receipts)
+}
+
+pub fn render_control_receipts(receipts: &[SupervisorControlReceipt]) -> String {
+    let mut out = String::new();
+    out.push_str("SUPERVISOR CONTROL RECEIPTS\n");
+    if receipts.is_empty() {
+        out.push_str("none\n");
+        return out;
+    }
+    for receipt in receipts {
+        out.push_str(&format!(
+            "{} {} action={} target={}\n",
+            receipt.request_id,
+            receipt.status,
+            receipt.action.as_deref().unwrap_or("-"),
+            receipt.entity_id.as_deref().unwrap_or("-")
+        ));
+        if receipt.status == "refused" {
+            if let Some(reason) = receipt.reason.as_deref() {
+                out.push_str(&format!("  reason: {reason}\n"));
+            }
+            continue;
+        }
+        if receipt.before.status != receipt.after.status {
+            out.push_str(&format!(
+                "  status: {} -> {}\n",
+                receipt.before.status.as_deref().unwrap_or("-"),
+                receipt.after.status.as_deref().unwrap_or("-")
+            ));
+        }
+        if receipt.before.priority != receipt.after.priority {
+            out.push_str(&format!(
+                "  priority: {} -> {}\n",
+                receipt
+                    .before
+                    .priority
+                    .map(|value| value.to_string())
+                    .as_deref()
+                    .unwrap_or("-"),
+                receipt
+                    .after
+                    .priority
+                    .map(|value| value.to_string())
+                    .as_deref()
+                    .unwrap_or("-")
+            ));
+        }
+    }
+    out
+}
+
+fn validate_receipt_priority(priority: i64) -> Result<(), SupervisorError> {
+    if !(0..=100).contains(&priority) {
+        return Err(SupervisorError::Invalid(
+            "receipt priority must be between 0 and 100".into(),
+        ));
+    }
+    Ok(())
 }
 
 impl SupervisorSnapshot {
@@ -828,6 +1075,61 @@ mod tests {
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(loaded, request);
         assert!(write_control_request(&base, &request).is_err());
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn loads_and_renders_control_receipts() {
+        let base = std::env::temp_dir().join(format!(
+            "agentdock-supervisor-receipts-{}",
+            new_control_request_id().unwrap()
+        ));
+        let receipt_dir = base.join(".ai/supervisor/receipts");
+        fs::create_dir_all(&receipt_dir).unwrap();
+        fs::write(
+            receipt_dir.join("req-1.json"),
+            br#"{
+              "schema_version":"supervisor-control-receipt/v1",
+              "request_id":"req-1",
+              "status":"applied",
+              "action":"pause-project",
+              "entity_type":"project",
+              "entity_id":"applyai",
+              "before":{"status":"active","priority":1},
+              "after":{"status":"paused","priority":1},
+              "applied_at":"2026-10-01T23:00:00Z",
+              "replayed":false,
+              "reason":null
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            receipt_dir.join("req-2.json"),
+            br#"{
+              "schema_version":"supervisor-control-receipt/v1",
+              "request_id":"req-2",
+              "status":"refused",
+              "action":null,
+              "entity_type":null,
+              "entity_id":null,
+              "before":{},
+              "after":{},
+              "applied_at":null,
+              "replayed":false,
+              "reason":"unknown project"
+            }"#,
+        )
+        .unwrap();
+
+        let receipts = load_control_receipts(&base, 10).unwrap();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0].request_id, "req-2");
+        let rendered = render_control_receipts(&receipts);
+        assert!(rendered.contains("req-1 applied"));
+        assert!(rendered.contains("status: active -> paused"));
+        assert!(rendered.contains("req-2 refused"));
+        assert!(rendered.contains("reason: unknown project"));
 
         fs::remove_dir_all(base).unwrap();
     }
