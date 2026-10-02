@@ -298,8 +298,7 @@ fn parse_windows(input: &str, protocol: Protocol) -> Vec<Service> {
 
         let key = (pid, port, protocol_key(&protocol));
         if seen.insert(key) {
-            let mut service =
-                empty_service(pid, port, protocol.clone(), Some(address), command);
+            let mut service = empty_service(pid, port, protocol.clone(), Some(address), command);
             service.command_line = command_line;
             services.push(service);
         }

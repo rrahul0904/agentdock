@@ -46,6 +46,20 @@ Run one-shot discovery:
 cargo run -p agentdock-cli -- scan --all
 ~~~
 
+Run the read-only Supervisor Console from a versioned snapshot:
+
+~~~bash
+cargo run -p agentdock-cli -- supervisor --snapshot docs/examples/supervisor.snapshot.example.json
+cargo run -p agentdock-cli -- console --snapshot docs/examples/supervisor.snapshot.example.json
+cargo run -p agentdock-cli -- watch --snapshot /path/to/autonomous-forge/.ai/supervisor/snapshot.json
+~~~
+
+The interactive console exposes status, projects, workers, tasks, risks, decisions, and snapshot refresh. Watch mode automatically prints validated state changes published by Autonomous Forge. See `docs/SUPERVISOR_CONSOLE.md`.
+
+The stacked Phase B control surface can also author explicit confirmed `supervisor-control/v1` requests for project pause/resume and project/task priority changes. These requests are local files only; Forge remains authoritative and applies them on its daemon cycle.
+
+The next stacked console slice adds strict `supervisor-control-receipt/v1` reads plus the same four controls directly inside `agentdock console --forge-root ...`. Interactive write requests require a trailing `confirm`, and queued requests remain explicitly pending until a Forge receipt proves the result.
+
 ## Stable localhost routing
 
 Default proxy:
@@ -116,6 +130,7 @@ Default database:
 ~~~text
 crates/
   agentdock-core/
+  agentdock-supervisor/
   process-discovery/
   project-resolver/
   framework-detection/

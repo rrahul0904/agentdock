@@ -407,10 +407,7 @@ impl Registry {
         Ok(records)
     }
 
-    pub fn list_services(
-        &self,
-        include_hidden: bool,
-    ) -> Result<Vec<ServiceRecord>, RegistryError> {
+    pub fn list_services(&self, include_hidden: bool) -> Result<Vec<ServiceRecord>, RegistryError> {
         let mut stmt = self.conn.prepare(
             "SELECT
                 id,
@@ -603,14 +600,7 @@ impl Registry {
 
         let mut events = Vec::new();
         for row in rows {
-            let (
-                seq,
-                kind,
-                entity_type,
-                entity_id,
-                payload_json,
-                created_at_ms,
-            ) = row?;
+            let (seq, kind, entity_type, entity_id, payload_json, created_at_ms) = row?;
 
             events.push(EventRecord {
                 seq,
@@ -769,10 +759,7 @@ fn ensure_canonical_route(
 }
 
 fn normalize_localhost_name(hostname: &str) -> Result<String, RegistryError> {
-    let normalized = hostname
-        .trim()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
+    let normalized = hostname.trim().trim_end_matches('.').to_ascii_lowercase();
 
     if normalized.is_empty()
         || normalized.contains('/')
@@ -833,9 +820,7 @@ fn insert_event(
     Ok(())
 }
 
-fn state_counts_tx(
-    tx: &Transaction<'_>,
-) -> Result<(usize, usize, usize), RegistryError> {
+fn state_counts_tx(tx: &Transaction<'_>) -> Result<(usize, usize, usize), RegistryError> {
     Ok((
         count_state_tx(tx, "active")?,
         count_state_tx(tx, "stale")?,
@@ -843,10 +828,7 @@ fn state_counts_tx(
     ))
 }
 
-fn count_state_tx(
-    tx: &Transaction<'_>,
-    state: &str,
-) -> Result<usize, RegistryError> {
+fn count_state_tx(tx: &Transaction<'_>, state: &str) -> Result<usize, RegistryError> {
     Ok(tx.query_row(
         "SELECT COUNT(*)
          FROM services
@@ -856,9 +838,7 @@ fn count_state_tx(
     )? as usize)
 }
 
-fn state_counts_conn(
-    conn: &Connection,
-) -> Result<(usize, usize, usize), RegistryError> {
+fn state_counts_conn(conn: &Connection) -> Result<(usize, usize, usize), RegistryError> {
     Ok((
         count_state_conn(conn, "active")?,
         count_state_conn(conn, "stale")?,
@@ -866,10 +846,7 @@ fn state_counts_conn(
     ))
 }
 
-fn count_state_conn(
-    conn: &Connection,
-    state: &str,
-) -> Result<usize, RegistryError> {
+fn count_state_conn(conn: &Connection, state: &str) -> Result<usize, RegistryError> {
     Ok(conn.query_row(
         "SELECT COUNT(*)
          FROM services
@@ -879,10 +856,7 @@ fn count_state_conn(
     )? as usize)
 }
 
-fn scalar_count(
-    conn: &Connection,
-    sql: &str,
-) -> Result<usize, RegistryError> {
+fn scalar_count(conn: &Connection, sql: &str) -> Result<usize, RegistryError> {
     Ok(conn.query_row(sql, [], |row| row.get::<_, i64>(0))? as usize)
 }
 
@@ -919,11 +893,7 @@ mod tests {
     use agentdock_core::Framework;
     use std::path::PathBuf;
 
-    fn service(
-        project_name: &str,
-        root: &str,
-        port: u16,
-    ) -> Service {
+    fn service(project_name: &str, root: &str, port: u16) -> Service {
         Service {
             pid: Some(42),
             port,
@@ -1045,10 +1015,8 @@ mod tests {
 
         assert_eq!(hostnames.len(), 2);
         assert!(hostnames.iter().any(|host| host == "app.localhost"));
-        assert!(
-            hostnames
-                .iter()
-                .any(|host| host.starts_with("app-") && host.ends_with(".localhost"))
-        );
+        assert!(hostnames
+            .iter()
+            .any(|host| host.starts_with("app-") && host.ends_with(".localhost")));
     }
 }

@@ -1,0 +1,43 @@
+name: Supervisor Console
+
+on:
+  pull_request:
+    paths:
+      - "crates/agentdock-supervisor/**"
+      - "crates/agentdock-cli/**"
+      - "docs/SUPERVISOR_CONSOLE.md"
+      - "docs/examples/supervisor.snapshot.example.json"
+      - "Cargo.toml"
+      - ".github/workflows/supervisor-console.yml"
+  push:
+    branches:
+      - "feat/supervisor-console"
+    paths:
+      - "crates/agentdock-supervisor/**"
+      - "crates/agentdock-cli/**"
+      - "docs/SUPERVISOR_CONSOLE.md"
+      - "docs/examples/supervisor.snapshot.example.json"
+      - "Cargo.toml"
+      - ".github/workflows/supervisor-console.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check focused formatting
+        run: cargo fmt -p agentdock-supervisor -- --check
+      - name: Test supervisor contract
+        run: cargo test -p agentdock-supervisor
+      - name: Check CLI integration
+        run: cargo check -p agentdock-cli

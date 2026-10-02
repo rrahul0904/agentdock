@@ -104,7 +104,10 @@ fn read_initial_request(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     }
 
     if request.is_empty() {
-        Err(io::Error::new(io::ErrorKind::UnexpectedEof, "empty request"))
+        Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "empty request",
+        ))
     } else {
         Ok(request)
     }
@@ -140,12 +143,7 @@ pub fn normalize_host(value: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn write_error(
-    stream: &mut TcpStream,
-    status: u16,
-    reason: &str,
-    message: &str,
-) -> io::Result<()> {
+fn write_error(stream: &mut TcpStream, status: u16, reason: &str, message: &str) -> io::Result<()> {
     let body = format!("AgentDock: {message}\n");
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
