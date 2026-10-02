@@ -2,8 +2,8 @@ use agent_attribution::enrich_agent;
 use agentdock_core::ServiceClassification;
 use agentdock_supervisor::{
     load_control_receipts, load_snapshot, new_control_request_id, render_control_receipts,
-    render_decisions, render_projects, render_risks, render_status, render_tasks,
-    render_workers, write_control_request, SupervisorControlRequest, SupervisorSnapshot,
+    render_decisions, render_projects, render_risks, render_status, render_tasks, render_workers,
+    write_control_request, SupervisorControlRequest, SupervisorSnapshot,
 };
 use framework_detection::enrich_service;
 use process_discovery::{DiscoveryOptions, NativeDiscovery, ServiceDiscovery};
@@ -51,7 +51,10 @@ fn scan(args: &[String]) {
             }
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&services).expect("serialize services"));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&services).expect("serialize services")
+                );
                 return;
             }
 
@@ -67,8 +70,15 @@ fn scan(args: &[String]) {
             );
 
             for service in services {
-                let pid = service.pid.map(|pid| pid.to_string()).unwrap_or_else(|| "-".into());
-                let project = service.project.as_ref().map(|p| p.name.as_str()).unwrap_or("-");
+                let pid = service
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "-".into());
+                let project = service
+                    .project
+                    .as_ref()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("-");
                 let hostname = service.stable_hostname().unwrap_or_else(|| "-".into());
                 println!(
                     "{:<8} {:<7} {:<16} {:<14} {:<24} {}",
@@ -109,7 +119,10 @@ fn daemon(args: &[String]) {
 
     match http_get(&addr, path) {
         Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
-            Ok(value) => println!("{}", serde_json::to_string_pretty(&value).expect("serialize json")),
+            Ok(value) => println!(
+                "{}",
+                serde_json::to_string_pretty(&value).expect("serialize json")
+            ),
             Err(_) => println!("{body}"),
         },
         Err(error) => {
@@ -127,10 +140,14 @@ fn http_get(addr: &str, path: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())?;
 
     let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(|error| error.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| error.to_string())?;
 
     let mut response = String::new();
-    stream.read_to_string(&mut response).map_err(|error| error.to_string())?;
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
     let (headers, body) = response
         .split_once("\r\n\r\n")
         .ok_or_else(|| "invalid HTTP response".to_string())?;
@@ -246,9 +263,7 @@ fn console(args: &[String]) {
                     Ok(items) => print!("{}", render_control_receipts(&items)),
                     Err(error) => eprintln!("receipt read refused: {error}"),
                 },
-                None => eprintln!(
-                    "receipts disabled: start console with --forge-root <path>"
-                ),
+                None => eprintln!("receipts disabled: start console with --forge-root <path>"),
             },
             "refresh" => match load_snapshot(&path) {
                 Ok(updated) => {
@@ -278,7 +293,8 @@ fn console(args: &[String]) {
             _ if matches!(
                 parts.first().copied(),
                 Some("pause" | "resume" | "project-priority" | "task-priority")
-            ) => {
+            ) =>
+            {
                 if let Some(root) = forge_root.as_deref() {
                     match queue_console_control(root, &parts) {
                         Ok(request_id) => {
@@ -290,9 +306,7 @@ fn console(args: &[String]) {
                         Err(error) => eprintln!("control refused: {error}"),
                     }
                 } else {
-                    eprintln!(
-                        "control disabled: start console with --forge-root <path>"
-                    );
+                    eprintln!("control disabled: start console with --forge-root <path>");
                 }
             }
             other => eprintln!("unknown console command: {other}"),
@@ -319,9 +333,7 @@ fn watch(args: &[String]) {
         Some(value) => match value.parse::<u64>() {
             Ok(value) if (100..=60_000).contains(&value) => value,
             _ => {
-                eprintln!(
-                    "AgentDock watch refused: --interval-ms must be between 100 and 60000"
-                );
+                eprintln!("AgentDock watch refused: --interval-ms must be between 100 and 60000");
                 std::process::exit(2);
             }
         },
@@ -375,33 +387,19 @@ fn build_control_request(
     request_id: String,
 ) -> Result<SupervisorControlRequest, String> {
     let result = match action {
-        "pause-project" => SupervisorControlRequest::pause_project(
-            request_id,
-            target.to_string(),
-        ),
-        "resume-project" => SupervisorControlRequest::resume_project(
-            request_id,
-            target.to_string(),
-        ),
+        "pause-project" => SupervisorControlRequest::pause_project(request_id, target.to_string()),
+        "resume-project" => {
+            SupervisorControlRequest::resume_project(request_id, target.to_string())
+        }
         "set-project-priority" => {
-            let priority = priority.ok_or_else(|| {
-                "set-project-priority requires an integer priority".to_string()
-            })?;
-            SupervisorControlRequest::set_project_priority(
-                request_id,
-                target.to_string(),
-                priority,
-            )
+            let priority = priority
+                .ok_or_else(|| "set-project-priority requires an integer priority".to_string())?;
+            SupervisorControlRequest::set_project_priority(request_id, target.to_string(), priority)
         }
         "set-task-priority" => {
-            let priority = priority.ok_or_else(|| {
-                "set-task-priority requires an integer priority".to_string()
-            })?;
-            SupervisorControlRequest::set_task_priority(
-                request_id,
-                target.to_string(),
-                priority,
-            )
+            let priority = priority
+                .ok_or_else(|| "set-task-priority requires an integer priority".to_string())?;
+            SupervisorControlRequest::set_task_priority(request_id, target.to_string(), priority)
         }
         other => return Err(format!("unsupported action {other}")),
     };
@@ -431,43 +429,23 @@ fn queue_console_control(root: &str, parts: &[&str]) -> Result<String, String> {
     }
 
     match parts {
-        ["pause", project_id, "confirm"] => queue_control_request(
-            root,
-            "pause-project",
-            project_id,
-            None,
-            None,
-        ),
-        ["resume", project_id, "confirm"] => queue_control_request(
-            root,
-            "resume-project",
-            project_id,
-            None,
-            None,
-        ),
+        ["pause", project_id, "confirm"] => {
+            queue_control_request(root, "pause-project", project_id, None, None)
+        }
+        ["resume", project_id, "confirm"] => {
+            queue_control_request(root, "resume-project", project_id, None, None)
+        }
         ["project-priority", project_id, priority, "confirm"] => {
             let value = priority
                 .parse::<i64>()
                 .map_err(|_| "priority must be an integer".to_string())?;
-            queue_control_request(
-                root,
-                "set-project-priority",
-                project_id,
-                Some(value),
-                None,
-            )
+            queue_control_request(root, "set-project-priority", project_id, Some(value), None)
         }
         ["task-priority", task_id, priority, "confirm"] => {
             let value = priority
                 .parse::<i64>()
                 .map_err(|_| "priority must be an integer".to_string())?;
-            queue_control_request(
-                root,
-                "set-task-priority",
-                task_id,
-                Some(value),
-                None,
-            )
+            queue_control_request(root, "set-task-priority", task_id, Some(value), None)
         }
         _ => Err("invalid supervisor control command shape".into()),
     }
@@ -541,9 +519,7 @@ fn control(args: &[String]) {
         match args.get(2).and_then(|value| value.parse::<i64>().ok()) {
             Some(value) => Some(value),
             None => {
-                eprintln!(
-                    "AgentDock control refused: {action} requires an integer priority"
-                );
+                eprintln!("AgentDock control refused: {action} requires an integer priority");
                 std::process::exit(2);
             }
         }
@@ -587,20 +563,60 @@ fn doctor() {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        println!("  lsof: {}", if std::process::Command::new("lsof").arg("-v").output().is_ok() { "available" } else { "missing" });
-        println!("  ps: {}", if std::process::Command::new("ps").arg("--help").output().is_ok() { "available" } else { "missing" });
+        println!(
+            "  lsof: {}",
+            if std::process::Command::new("lsof")
+                .arg("-v")
+                .output()
+                .is_ok()
+            {
+                "available"
+            } else {
+                "missing"
+            }
+        );
+        println!(
+            "  ps: {}",
+            if std::process::Command::new("ps")
+                .arg("--help")
+                .output()
+                .is_ok()
+            {
+                "available"
+            } else {
+                "missing"
+            }
+        );
     }
 
     #[cfg(target_os = "windows")]
     {
         let powershell = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "$PSVersionTable.PSVersion.ToString()",
+            ])
             .output();
-        println!("  powershell: {}", if powershell.is_ok() { "available" } else { "missing" });
+        println!(
+            "  powershell: {}",
+            if powershell.is_ok() {
+                "available"
+            } else {
+                "missing"
+            }
+        );
     }
 
     let addr = std::env::var("AGENTDOCK_ADDR").unwrap_or_else(|_| DEFAULT_DAEMON_ADDR.into());
-    println!("  daemon: {}", if http_get(&addr, "/healthz").is_ok() { "reachable" } else { "not running" });
+    println!(
+        "  daemon: {}",
+        if http_get(&addr, "/healthz").is_ok() {
+            "reachable"
+        } else {
+            "not running"
+        }
+    );
 }
 
 fn help() {
@@ -619,7 +635,9 @@ fn help() {
     println!("  agentdock control pause-project <project-id> --root <forge-root> --confirm");
     println!("  agentdock control resume-project <project-id> --root <forge-root> --confirm");
     println!("  agentdock control set-project-priority <project-id> <0-100> --root <forge-root> --confirm");
-    println!("  agentdock control set-task-priority <task-id> <0-100> --root <forge-root> --confirm");
+    println!(
+        "  agentdock control set-task-priority <task-id> <0-100> --root <forge-root> --confirm"
+    );
     println!("  agentdock receipts --root <forge-root> [--limit 20] [--json]");
     println!("  agentdock doctor");
 }
