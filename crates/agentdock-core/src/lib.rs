@@ -33,6 +33,49 @@ pub struct ProjectIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceRootIdentity {
+    pub key: String,
+    pub project: ProjectIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceScope {
+    pub version: u16,
+    pub roots: Vec<WorkspaceRootIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActionGrant {
+    Denied,
+    Allowed,
+    ApprovalRequired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceCapabilityPolicy {
+    pub read: ActionGrant,
+    pub search: ActionGrant,
+    pub edit: ActionGrant,
+    pub test: ActionGrant,
+    pub debug: ActionGrant,
+    pub terminal: ActionGrant,
+}
+
+impl Default for WorkspaceCapabilityPolicy {
+    fn default() -> Self {
+        Self {
+            read: ActionGrant::Allowed,
+            search: ActionGrant::Allowed,
+            edit: ActionGrant::ApprovalRequired,
+            test: ActionGrant::ApprovalRequired,
+            debug: ActionGrant::ApprovalRequired,
+            terminal: ActionGrant::ApprovalRequired,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentIdentity {
     pub kind: AgentKind,
     pub session_id: Option<String>,
@@ -170,5 +213,17 @@ mod tests {
         ] {
             assert_eq!(LifecycleState::parse(state.as_str()), Some(state));
         }
+    }
+
+    #[test]
+    fn workspace_capabilities_default_to_read_first_and_gated_mutation() {
+        let policy = WorkspaceCapabilityPolicy::default();
+
+        assert_eq!(policy.read, ActionGrant::Allowed);
+        assert_eq!(policy.search, ActionGrant::Allowed);
+        assert_eq!(policy.edit, ActionGrant::ApprovalRequired);
+        assert_eq!(policy.test, ActionGrant::ApprovalRequired);
+        assert_eq!(policy.debug, ActionGrant::ApprovalRequired);
+        assert_eq!(policy.terminal, ActionGrant::ApprovalRequired);
     }
 }
