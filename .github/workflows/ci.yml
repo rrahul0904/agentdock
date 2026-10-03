@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "reverse/**"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   rust:
@@ -18,13 +19,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Formatting (changed Rust files)
+        if: matrix.os == 'ubuntu-latest' && github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base=main
+          fi
+          git fetch --no-tags --depth=1 origin "$base"
+          mapfile -t files < <(git diff --name-only FETCH_HEAD HEAD -- '*.rs')
+          if (( ${#files[@]} )); then
+            rustfmt --edition 2021 --check "${files[@]}"
+          fi
       - name: Formatting
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/main'
         run: cargo fmt --all -- --check
       - name: Check
         run: cargo check --workspace
       - name: Test
         run: cargo test --workspace
+      - name: Focused cloud durability and recovery tests
+        run: cargo test -p agentdock-core cloud:: -- --nocapture
 
   mcp:
     name: MCP TypeScript
