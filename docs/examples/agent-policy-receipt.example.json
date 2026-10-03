@@ -1,0 +1,10 @@
+{
+  "schema_version": "agent-policy-delivery-receipt/v1",
+  "session_id": "example-session",
+  "project_id": "example-project",
+  "idempotency_key": "policy-2026-10-03-001",
+  "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "outcome": "acknowledged",
+  "reason": null,
+  "completed_at": "2026-10-03T07:00:00+00:00"
+}
