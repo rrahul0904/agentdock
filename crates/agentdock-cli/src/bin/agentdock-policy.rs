@@ -29,85 +29,7 @@ struct DeliveryReceipt {
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let command = args.first().map(String::as_str).unwrap_or("help");
-    let root = match arg_value(&args, "--root") {
-        Some(value) => PathBuf::from(value),
-        None if command == "help" || command == "--help" || command == "-h" => {
-            help();
-            return;
-        }
-        None => {
-            eprintln!("agentdock-policy refused: missing required --root <forge-root>");
-            std::process::exit(2);
-        }
-    };
-    let json_output = args.iter().any(|arg| arg == "--json");
-
-    let result = match command {
-        "sessions" => list_sessions(&root).map(|items| {
-            if json_output {
-                serde_json::to_string_pretty(
-                    &items
-                        .iter()
-                        .map(|item| {
-                            json!({
-                                "session_id": item.session_id,
-                                "project_id": item.project_id,
-                                "registered_at": item.registered_at,
-                            })
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .expect("serialize sessions")
-            } else {
-                render_sessions(&items)
-            }
-        }),
-        "receipts" => {
-            let limit = match arg_value(&args, "--limit") {
-                Some(value) => match value.parse::<usize>() {
-                    Ok(value) if (1..=MAX_RECEIPTS).contains(&value) => value,
-                    _ => {
-                        eprintln!(
-                            "agentdock-policy refused: --limit must be between 1 and {MAX_RECEIPTS}"
-                        );
-                        std::process::exit(2);
-                    }
-                },
-                None => 20,
-            };
-            list_receipts(&root, limit).map(|items| {
-                if json_output {
-                    serde_json::to_string_pretty(
-                        &items
-                            .iter()
-                            .map(|item| {
-                                json!({
-                                    "session_id": item.session_id,
-                                    "project_id": item.project_id,
-                                    "idempotency_key": item.idempotency_key,
-                                    "policy_sha256": item.policy_sha256,
-                                    "outcome": item.outcome,
-                                    "reason": item.reason,
-                                    "completed_at": item.completed_at,
-                                })
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                    .expect("serialize receipts")
-                } else {
-                    render_receipts(&items)
-                }
-            })
-        }
-        "help" | "--help" | "-h" => {
-            help();
-            return;
-        }
-        other => Err(format!("unknown command: {other}")),
-    };
-
-    match result {
+    match run(&args) {
         Ok(output) => print!("{output}"),
         Err(error) => {
             eprintln!("agentdock-policy refused: {error}");
@@ -116,13 +38,83 @@ fn main() {
     }
 }
 
-fn help() {
-    println!("AgentDock policy/session viewer");
-    println!("Usage:");
-    println!("  agentdock-policy sessions --root <forge-root> [--json]");
-    println!("  agentdock-policy receipts --root <forge-root> [--limit 20] [--json]");
-    println!();
-    println!("Read-only: this tool never reads policy request payloads and never writes Forge state.");
+fn run(args: &[String]) -> Result<String, String> {
+    let command = args.first().map(String::as_str).unwrap_or("help");
+    if matches!(command, "help" | "--help" | "-h") {
+        return Ok(help_text());
+    }
+    let root = arg_value(args, "--root")
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing required --root <forge-root>".to_string())?;
+    let json_output = args.iter().any(|arg| arg == "--json");
+
+    match command {
+        "sessions" => {
+            let items = list_sessions(&root)?;
+            if json_output {
+                let values = items
+                    .iter()
+                    .map(|item| {
+                        json!({
+                            "session_id": &item.session_id,
+                            "project_id": &item.project_id,
+                            "registered_at": &item.registered_at,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(serde_json::to_string_pretty(&values).expect("serialize sessions") + "\n")
+            } else {
+                Ok(render_sessions(&items))
+            }
+        }
+        "receipts" => {
+            let limit = match arg_value(args, "--limit") {
+                Some(value) => value.parse::<usize>().map_err(|_| {
+                    format!("--limit must be between 1 and {MAX_RECEIPTS}")
+                })?,
+                None => 20,
+            };
+            if !(1..=MAX_RECEIPTS).contains(&limit) {
+                return Err(format!(
+                    "--limit must be between 1 and {MAX_RECEIPTS}"
+                ));
+            }
+            let items = list_receipts(&root, limit)?;
+            if json_output {
+                let values = items
+                    .iter()
+                    .map(|item| {
+                        json!({
+                            "session_id": &item.session_id,
+                            "project_id": &item.project_id,
+                            "idempotency_key": &item.idempotency_key,
+                            "policy_sha256": &item.policy_sha256,
+                            "outcome": &item.outcome,
+                            "reason": item.reason.as_deref(),
+                            "completed_at": &item.completed_at,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                Ok(serde_json::to_string_pretty(&values).expect("serialize receipts") + "\n")
+            } else {
+                Ok(render_receipts(&items))
+            }
+        }
+        other => Err(format!("unknown command: {other}")),
+    }
+}
+
+fn help_text() -> String {
+    [
+        "AgentDock policy/session viewer",
+        "Usage:",
+        "  agentdock-policy sessions --root <forge-root> [--json]",
+        "  agentdock-policy receipts --root <forge-root> [--limit 20] [--json]",
+        "",
+        "Read-only: this tool never reads policy request payloads and never writes Forge state.",
+        "",
+    ]
+    .join("\n")
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -165,9 +157,10 @@ fn is_lower_sha256(value: &str) -> bool {
 
 fn refuse_symlink(path: &Path, label: &str) -> Result<(), String> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(format!("{label} must not be a symlink: {}", path.display()))
-        }
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "{label} must not be a symlink: {}",
+            path.display()
+        )),
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("cannot inspect {label}: {error}")),
@@ -175,7 +168,8 @@ fn refuse_symlink(path: &Path, label: &str) -> Result<(), String> {
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf, String> {
-    let root = fs::canonicalize(root).map_err(|error| format!("Forge root is unavailable: {error}"))?;
+    let root =
+        fs::canonicalize(root).map_err(|error| format!("Forge root is unavailable: {error}"))?;
     if !root.is_dir() {
         return Err("Forge root must be a directory".into());
     }
@@ -228,11 +222,18 @@ fn strict_keys(object: &Map<String, Value>, allowed: &[&str], label: &str) -> Re
     if unknown.is_empty() {
         Ok(())
     } else {
-        Err(format!("{label} has unknown keys: {}", unknown.join(", ")))
+        Err(format!(
+            "{label} has unknown keys: {}",
+            unknown.join(", ")
+        ))
     }
 }
 
-fn required_string(object: &Map<String, Value>, field: &str, label: &str) -> Result<String, String> {
+fn required_string(
+    object: &Map<String, Value>,
+    field: &str,
+    label: &str,
+) -> Result<String, String> {
     object
         .get(field)
         .and_then(Value::as_str)
@@ -256,7 +257,12 @@ fn parse_registration(path: &Path, expected_session_id: &str) -> Result<Registra
     let object = read_json_object(path, "session registration")?;
     strict_keys(
         &object,
-        &["schema_version", "session_id", "project_id", "registered_at"],
+        &[
+            "schema_version",
+            "session_id",
+            "project_id",
+            "registered_at",
+        ],
         "session registration",
     )?;
     if object.get("schema_version").and_then(Value::as_str) != Some(REGISTRATION_SCHEMA) {
@@ -305,7 +311,9 @@ fn session_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
         safe_id(&name, "registered session directory name")?;
         sessions.push(path);
         if sessions.len() > MAX_SESSIONS {
-            return Err(format!("agent-session registry exceeds {MAX_SESSIONS} sessions"));
+            return Err(format!(
+                "agent-session registry exceeds {MAX_SESSIONS} sessions"
+            ));
         }
     }
     sessions.sort();
@@ -321,7 +329,9 @@ fn list_sessions(root: &Path) -> Result<Vec<Registration>, String> {
             .ok_or_else(|| "session directory name is invalid".to_string())?;
         let registration = session.join("registration.json");
         if !registration.exists() {
-            return Err(format!("registered session {session_id} is missing registration.json"));
+            return Err(format!(
+                "registered session {session_id} is missing registration.json"
+            ));
         }
         registrations.push(parse_registration(&registration, session_id)?);
     }
@@ -401,7 +411,9 @@ fn parse_delivery_receipt(
 
 fn list_receipts(root: &Path, limit: usize) -> Result<Vec<DeliveryReceipt>, String> {
     if !(1..=MAX_RECEIPTS).contains(&limit) {
-        return Err(format!("receipt limit must be between 1 and {MAX_RECEIPTS}"));
+        return Err(format!(
+            "receipt limit must be between 1 and {MAX_RECEIPTS}"
+        ));
     }
     let mut receipts = Vec::new();
     for session in session_directories(root)? {
@@ -409,8 +421,7 @@ fn list_receipts(root: &Path, limit: usize) -> Result<Vec<DeliveryReceipt>, Stri
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| "session directory name is invalid".to_string())?;
-        let registration_path = session.join("registration.json");
-        let registration = parse_registration(&registration_path, session_id)?;
+        let registration = parse_registration(&session.join("registration.json"), session_id)?;
         let deliveries = session.join("delivery-receipts");
         refuse_symlink(&deliveries, "delivery receipt directory")?;
         if !deliveries.exists() {
@@ -422,7 +433,8 @@ fn list_receipts(root: &Path, limit: usize) -> Result<Vec<DeliveryReceipt>, Stri
         for entry in fs::read_dir(&deliveries)
             .map_err(|error| format!("cannot list delivery receipts: {error}"))?
         {
-            let entry = entry.map_err(|error| format!("cannot read delivery receipt entry: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("cannot read delivery receipt entry: {error}"))?;
             let path = entry.path();
             if path.is_symlink() {
                 return Err("delivery receipt symlinks are refused".into());
@@ -439,7 +451,9 @@ fn list_receipts(root: &Path, limit: usize) -> Result<Vec<DeliveryReceipt>, Stri
             }
             receipts.push(parse_delivery_receipt(&path, &registration)?);
             if receipts.len() > MAX_RECEIPTS {
-                return Err(format!("delivery receipt inventory exceeds {MAX_RECEIPTS}"));
+                return Err(format!(
+                    "delivery receipt inventory exceeds {MAX_RECEIPTS}"
+                ));
             }
         }
     }
@@ -568,11 +582,11 @@ mod tests {
     }
 
     #[test]
-    fn refuses_project_mismatch_and_bad_filename() {
+    fn refuses_project_mismatch() {
         let root = temp_root("mismatch");
         let session = seed_session(&root, "session-1", "applyai");
         fs::write(
-            session.join("delivery-receipts/wrong-name.json"),
+            session.join("delivery-receipts/key-1.json"),
             serde_json::to_vec_pretty(&json!({
                 "schema_version": DELIVERY_RECEIPT_SCHEMA,
                 "session_id": "session-1",
@@ -588,6 +602,30 @@ mod tests {
         .unwrap();
         let error = list_receipts(&root, 20).unwrap_err();
         assert!(error.contains("project/session mismatch"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refuses_filename_idempotency_mismatch() {
+        let root = temp_root("filename");
+        let session = seed_session(&root, "session-1", "applyai");
+        fs::write(
+            session.join("delivery-receipts/wrong-name.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": DELIVERY_RECEIPT_SCHEMA,
+                "session_id": "session-1",
+                "project_id": "applyai",
+                "idempotency_key": "key-1",
+                "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "outcome": "timeout",
+                "reason": "bounded acknowledgement wait expired",
+                "completed_at": "2026-10-03T07:01:00+00:00"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = list_receipts(&root, 20).unwrap_err();
+        assert!(error.contains("filename must match idempotency_key"));
         fs::remove_dir_all(root).unwrap();
     }
 
