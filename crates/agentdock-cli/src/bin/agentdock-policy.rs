@@ -69,15 +69,13 @@ fn run(args: &[String]) -> Result<String, String> {
         }
         "receipts" => {
             let limit = match arg_value(args, "--limit") {
-                Some(value) => value.parse::<usize>().map_err(|_| {
-                    format!("--limit must be between 1 and {MAX_RECEIPTS}")
-                })?,
+                Some(value) => value
+                    .parse::<usize>()
+                    .map_err(|_| format!("--limit must be between 1 and {MAX_RECEIPTS}"))?,
                 None => 20,
             };
             if !(1..=MAX_RECEIPTS).contains(&limit) {
-                return Err(format!(
-                    "--limit must be between 1 and {MAX_RECEIPTS}"
-                ));
+                return Err(format!("--limit must be between 1 and {MAX_RECEIPTS}"));
             }
             let items = list_receipts(&root, limit)?;
             if json_output {
@@ -157,10 +155,9 @@ fn is_lower_sha256(value: &str) -> bool {
 
 fn refuse_symlink(path: &Path, label: &str) -> Result<(), String> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
-            "{label} must not be a symlink: {}",
-            path.display()
-        )),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("{label} must not be a symlink: {}", path.display()))
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("cannot inspect {label}: {error}")),
@@ -222,10 +219,7 @@ fn strict_keys(object: &Map<String, Value>, allowed: &[&str], label: &str) -> Re
     if unknown.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "{label} has unknown keys: {}",
-            unknown.join(", ")
-        ))
+        Err(format!("{label} has unknown keys: {}", unknown.join(", ")))
     }
 }
 
@@ -451,9 +445,7 @@ fn list_receipts(root: &Path, limit: usize) -> Result<Vec<DeliveryReceipt>, Stri
             }
             receipts.push(parse_delivery_receipt(&path, &registration)?);
             if receipts.len() > MAX_RECEIPTS {
-                return Err(format!(
-                    "delivery receipt inventory exceeds {MAX_RECEIPTS}"
-                ));
+                return Err(format!("delivery receipt inventory exceeds {MAX_RECEIPTS}"));
             }
         }
     }
