@@ -1,0 +1,6 @@
+{
+  "schema_version": "agent-session-registration/v1",
+  "session_id": "example-session",
+  "project_id": "example-project",
+  "registered_at": "2026-10-03T07:00:00+00:00"
+}

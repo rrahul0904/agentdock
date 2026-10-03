@@ -21,6 +21,10 @@ AgentDock now includes:
 - owner-scoped port reservations
 - MCP TypeScript v2 server backed by the daemon
 - Rust + MCP CI configuration
+- Codex-style Supervisor Console backed by `supervisor-snapshot/v1`
+- confirmed local Forge pause/resume and priority request authoring
+- durable Forge control-receipt visibility
+- read-only registered-agent-session and policy-delivery receipt visibility
 
 ## Run locally
 
@@ -46,19 +50,25 @@ Run one-shot discovery:
 cargo run -p agentdock-cli -- scan --all
 ~~~
 
-Run the read-only Supervisor Console from a versioned snapshot:
+Run the Supervisor Console from a versioned Forge snapshot:
 
 ~~~bash
 cargo run -p agentdock-cli -- supervisor --snapshot docs/examples/supervisor.snapshot.example.json
-cargo run -p agentdock-cli -- console --snapshot docs/examples/supervisor.snapshot.example.json
+cargo run -p agentdock-cli -- console --snapshot /path/to/autonomous-forge/.ai/supervisor/snapshot.json --forge-root /path/to/autonomous-forge
 cargo run -p agentdock-cli -- watch --snapshot /path/to/autonomous-forge/.ai/supervisor/snapshot.json
 ~~~
 
-The interactive console exposes status, projects, workers, tasks, risks, decisions, and snapshot refresh. Watch mode automatically prints validated state changes published by Autonomous Forge. See `docs/SUPERVISOR_CONSOLE.md`.
+The console exposes status, projects, workers, tasks, risks, decisions, snapshot refresh, durable Forge control receipts, and explicit confirmed pause/resume and project/task priority controls. Forge remains authoritative: a queued request is not described as applied until a durable Forge receipt proves it. See `docs/SUPERVISOR_CONSOLE.md`.
 
-The stacked Phase B control surface can also author explicit confirmed `supervisor-control/v1` requests for project pause/resume and project/task priority changes. These requests are local files only; Forge remains authoritative and applies them on its daemon cycle.
+Inspect the registered local agent sessions and durable AUTO-049 policy-delivery outcomes without reading policy request payloads:
 
-The next stacked console slice adds strict `supervisor-control-receipt/v1` reads plus the same four controls directly inside `agentdock console --forge-root ...`. Interactive write requests require a trailing `confirm`, and queued requests remain explicitly pending until a Forge receipt proves the result.
+~~~bash
+cargo run -p agentdock-cli --bin agentdock-policy -- sessions --root /path/to/autonomous-forge
+cargo run -p agentdock-cli --bin agentdock-policy -- receipts --root /path/to/autonomous-forge --limit 20
+cargo run -p agentdock-cli --bin agentdock-policy -- receipts --root /path/to/autonomous-forge --limit 20 --json
+~~~
+
+`agentdock-policy` is read-only. It validates `agent-session-registration/v1` and `agent-policy-delivery-receipt/v1`, refuses unsafe/symlinked paths, and never opens session inbox request payloads. See `docs/AGENT_POLICY_SESSIONS.md`.
 
 ## Stable localhost routing
 
@@ -78,10 +88,10 @@ The same URL follows the project when its underlying server changes ports.
 
 ## MCP server
 
-Install workspace dependencies:
+Install package dependencies:
 
 ~~~bash
-pnpm install
+pnpm --dir packages/mcp-server install --no-frozen-lockfile
 ~~~
 
 Run the stdio MCP server:
@@ -115,7 +125,7 @@ Every MCP process receives its own owner token unless AGENTDOCK_SESSION_ID is ex
 
 AgentDock does not expose arbitrary shell execution or generic process-kill tools.
 
-cleanup_orphans can inventory orphaned services, but destructive cleanup remains disabled until process/session ownership can be proved reliably.
+Supervisor controls remain typed, bounded local requests. Agent-policy session visibility is read-only. Process-group remediation and policy delivery are owned by Autonomous Forge and require their respective Forge confirmation/evidence contracts.
 
 ## Persistence
 
@@ -147,7 +157,7 @@ packages/
 
 ## Next
 
-The next implementation wave is deeper ownership/lifecycle tracking: durable agent sessions, Git worktree/branch topology, log capture, health checks, and only then bounded process cleanup.
+The canonical Local Astra path is to keep widening evidence-backed supervision and agent coordination without bypassing explicit ownership, confirmation, receipt, and verification boundaries.
 
 ## License
 

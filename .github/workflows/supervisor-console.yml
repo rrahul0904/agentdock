@@ -6,16 +6,19 @@ on:
       - "crates/agentdock-supervisor/**"
       - "crates/agentdock-cli/**"
       - "docs/SUPERVISOR_CONSOLE.md"
+      - "docs/AGENT_POLICY_SESSIONS.md"
       - "docs/examples/supervisor.snapshot.example.json"
       - "Cargo.toml"
       - ".github/workflows/supervisor-console.yml"
   push:
     branches:
       - "feat/supervisor-console"
+      - "feat/supervisor-agent-policy-receipts"
     paths:
       - "crates/agentdock-supervisor/**"
       - "crates/agentdock-cli/**"
       - "docs/SUPERVISOR_CONSOLE.md"
+      - "docs/AGENT_POLICY_SESSIONS.md"
       - "docs/examples/supervisor.snapshot.example.json"
       - "Cargo.toml"
       - ".github/workflows/supervisor-console.yml"
@@ -36,8 +39,10 @@ jobs:
         with:
           components: rustfmt
       - name: Check focused formatting
-        run: cargo fmt -p agentdock-supervisor -- --check
+        run: cargo fmt -p agentdock-supervisor -p agentdock-cli -- --check
       - name: Test supervisor contract
         run: cargo test -p agentdock-supervisor
+      - name: Test agent policy session viewer
+        run: cargo test -p agentdock-cli --bin agentdock-policy
       - name: Check CLI integration
         run: cargo check -p agentdock-cli
