@@ -9,6 +9,7 @@ members = [
   "crates/agent-attribution",
   "crates/port-manager",
   "crates/agentdock-registry",
+  "crates/agentdock-hive",
   "crates/agentdock-proxy",
   "crates/agentdockd",
   "crates/agentdock-cli",

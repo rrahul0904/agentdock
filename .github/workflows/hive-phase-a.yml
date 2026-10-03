@@ -1,0 +1,32 @@
+name: Hive Phase A
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/agentdock-hive/**'
+      - 'crates/agentdockd/**'
+      - '.github/workflows/hive-phase-a.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'crates/agentdock-hive/**'
+      - 'crates/agentdockd/**'
+      - '.github/workflows/hive-phase-a.yml'
+
+jobs:
+  hive:
+    name: Hive acceptance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check daemon wiring
+        run: cargo check -p agentdockd
+      - name: Phase A acceptance tests
+        run: cargo test -p agentdock-hive

@@ -2,6 +2,7 @@ mod http;
 
 use agent_attribution::enrich_agent;
 use agentdock_core::Service;
+use agentdock_hive::Hive;
 use agentdock_proxy::{ProxyTarget, TargetResolver};
 use agentdock_registry::{now_ms, Registry, ServiceRecord};
 use framework_detection::enrich_service;
@@ -35,6 +36,7 @@ struct ProxyRuntime {
 }
 
 struct DaemonState {
+    _hive: Hive,
     registry: Arc<Mutex<Registry>>,
     ports: Arc<Mutex<PortManager>>,
     proxy: ProxyRuntime,
@@ -89,6 +91,11 @@ fn run() -> Result<(), String> {
     let mut registry = Registry::open(&db_path).map_err(|error| error.to_string())?;
     registry.set_orphan_after_ms(orphan_after_ms);
 
+    // Issue #18 Phase A: reuse the existing DB, reclaim only expired delivery leases.
+    // The hive remains an internal typed API, not an unauthenticated HTTP endpoint.
+    let mut hive = Hive::open(&db_path).map_err(|error| error.to_string())?;
+    hive.recover(now_ms()).map_err(|error| error.to_string())?;
+
     let registry = Arc::new(Mutex::new(registry));
     let ports = Arc::new(Mutex::new(PortManager::default()));
 
@@ -117,6 +124,7 @@ fn run() -> Result<(), String> {
     }
 
     let state = DaemonState {
+        _hive: hive,
         registry,
         ports,
         proxy: ProxyRuntime {
