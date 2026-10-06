@@ -12,6 +12,7 @@ members = [
   "crates/agentdock-proxy",
   "crates/agentdockd",
   "crates/agentdock-cli",
+  "crates/mobile-runtime",
 ]
 
 [workspace.package]
