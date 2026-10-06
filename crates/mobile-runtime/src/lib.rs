@@ -131,20 +131,26 @@ impl MobileRuntimeProfile {
             return Err(MobileRuntimeError::EmptyWorkspaceRoot);
         }
 
-        if matches!(self.kind, RuntimeKind::NativeAndroid | RuntimeKind::TermuxProot)
-            && !self.platform.eq_ignore_ascii_case("android")
+        if matches!(
+            self.kind,
+            RuntimeKind::NativeAndroid | RuntimeKind::TermuxProot
+        ) && !self.platform.eq_ignore_ascii_case("android")
         {
             return Err(MobileRuntimeError::AndroidRuntimeRequiresAndroidPlatform);
         }
 
-        if matches!(self.kind, RuntimeKind::NativeAndroid | RuntimeKind::TermuxProot)
-            && self.isolation.is_strong_process_isolation()
+        if matches!(
+            self.kind,
+            RuntimeKind::NativeAndroid | RuntimeKind::TermuxProot
+        ) && self.isolation.is_strong_process_isolation()
         {
             return Err(MobileRuntimeError::UnsupportedIsolationClaim);
         }
 
-        if matches!(self.kind, RuntimeKind::NativeAndroid | RuntimeKind::TermuxProot)
-            && self.android_api_level.is_none()
+        if matches!(
+            self.kind,
+            RuntimeKind::NativeAndroid | RuntimeKind::TermuxProot
+        ) && self.android_api_level.is_none()
         {
             return Err(MobileRuntimeError::MissingAndroidApiLevel);
         }
@@ -495,7 +501,10 @@ mod tests {
 
     #[test]
     fn execution_mode_serialization_is_stable() {
-        assert_eq!(serde_json::to_string(&ExecutionMode::Local).unwrap(), "\"local\"");
+        assert_eq!(
+            serde_json::to_string(&ExecutionMode::Local).unwrap(),
+            "\"local\""
+        );
         assert_eq!(
             serde_json::to_string(&ExecutionMode::Remote).unwrap(),
             "\"remote\""
