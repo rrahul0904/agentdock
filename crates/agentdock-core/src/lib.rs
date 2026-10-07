@@ -1,3 +1,6 @@
+pub mod governed_attention;
+pub use governed_attention::*;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
