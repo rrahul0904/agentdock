@@ -5,7 +5,9 @@ const MAX_REQUEST_USES: u32 = 100;
 const MAX_REASON_BYTES: usize = 4_096;
 const MAX_SUMMARY_BYTES: usize = 2_048;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityEnvironment {
     Local,
@@ -15,7 +17,9 @@ pub enum CapabilityEnvironment {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityActionClass {
     Observe,
@@ -28,7 +32,9 @@ pub enum CapabilityActionClass {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityDecision {
     Pending,
@@ -84,7 +90,9 @@ impl CapabilityRequest {
         if !is_lower_hex_sha256(&self.intent_digest) {
             return Err("invalid intent digest");
         }
-        if self.requested_ttl_seconds == 0 || self.requested_ttl_seconds > MAX_REQUEST_TTL_SECONDS {
+        if self.requested_ttl_seconds == 0
+            || self.requested_ttl_seconds > MAX_REQUEST_TTL_SECONDS
+        {
             return Err("invalid requested ttl");
         }
         if self.requested_uses == 0 || self.requested_uses > MAX_REQUEST_USES {
@@ -99,10 +107,17 @@ impl CapabilityRequest {
     /// Conservative projection only. Policy remains authoritative.
     /// Unknown classifications and production are never eligible for auto-approval.
     pub fn eligible_for_auto_approval(&self) -> bool {
-        matches!(
-            self.environment,
-            CapabilityEnvironment::Local | CapabilityEnvironment::Preview | CapabilityEnvironment::Staging
-        ) && matches!(self.action, CapabilityActionClass::Observe | CapabilityActionClass::Read)
+        self.validate().is_ok()
+            && matches!(
+                self.environment,
+                CapabilityEnvironment::Local
+                    | CapabilityEnvironment::Preview
+                    | CapabilityEnvironment::Staging
+            )
+            && matches!(
+                self.action,
+                CapabilityActionClass::Observe | CapabilityActionClass::Read
+            )
     }
 }
 
@@ -127,7 +142,9 @@ impl CapabilityGrantView {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum AttentionKind {
     NeedsInput,
@@ -186,9 +203,9 @@ impl AttentionItem {
 fn is_bounded_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+        })
 }
 
 fn is_lower_hex_sha256(value: &str) -> bool {
@@ -202,7 +219,10 @@ fn is_lower_hex_sha256(value: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn request(environment: CapabilityEnvironment, action: CapabilityActionClass) -> CapabilityRequest {
+    fn request(
+        environment: CapabilityEnvironment,
+        action: CapabilityActionClass,
+    ) -> CapabilityRequest {
         CapabilityRequest {
             id: "req-1".into(),
             project_id: "project-1".into(),
@@ -227,25 +247,45 @@ mod tests {
     }
 
     #[test]
+    fn malformed_request_never_auto_approves() {
+        let mut value = request(CapabilityEnvironment::Preview, CapabilityActionClass::Read);
+        value.intent_digest = "not-a-digest".into();
+        assert!(!value.eligible_for_auto_approval());
+    }
+
+    #[test]
     fn unknown_environment_or_action_never_auto_approves() {
-        assert!(!request(CapabilityEnvironment::Unknown, CapabilityActionClass::Read)
-            .eligible_for_auto_approval());
-        assert!(!request(CapabilityEnvironment::Local, CapabilityActionClass::Unknown)
-            .eligible_for_auto_approval());
+        assert!(
+            !request(CapabilityEnvironment::Unknown, CapabilityActionClass::Read)
+                .eligible_for_auto_approval()
+        );
+        assert!(
+            !request(CapabilityEnvironment::Local, CapabilityActionClass::Unknown)
+                .eligible_for_auto_approval()
+        );
     }
 
     #[test]
     fn production_never_auto_approves_even_reads() {
-        assert!(!request(CapabilityEnvironment::Production, CapabilityActionClass::Read)
-            .eligible_for_auto_approval());
+        assert!(
+            !request(CapabilityEnvironment::Production, CapabilityActionClass::Read)
+                .eligible_for_auto_approval()
+        );
     }
 
     #[test]
     fn remote_mutations_never_auto_approve() {
-        assert!(!request(CapabilityEnvironment::Staging, CapabilityActionClass::RemoteWrite)
-            .eligible_for_auto_approval());
-        assert!(!request(CapabilityEnvironment::Preview, CapabilityActionClass::Deploy)
-            .eligible_for_auto_approval());
+        assert!(
+            !request(
+                CapabilityEnvironment::Staging,
+                CapabilityActionClass::RemoteWrite,
+            )
+            .eligible_for_auto_approval()
+        );
+        assert!(
+            !request(CapabilityEnvironment::Preview, CapabilityActionClass::Deploy)
+                .eligible_for_auto_approval()
+        );
     }
 
     #[test]
