@@ -140,7 +140,11 @@ impl HiveState {
             return Err(HiveError::AgentAlreadyExists(agent.agent_id));
         }
 
-        for existing in self.agents.values().filter(|a| a.floor_id == agent.floor_id) {
+        for existing in self
+            .agents
+            .values()
+            .filter(|a| a.floor_id == agent.floor_id)
+        {
             if existing.session_id == agent.session_id {
                 return Err(HiveError::SessionConflict(agent.session_id));
             }
@@ -272,12 +276,7 @@ impl HiveState {
         }))
     }
 
-    pub fn ack(
-        &mut self,
-        message_id: &str,
-        agent_id: &str,
-        lease: u64,
-    ) -> Result<(), HiveError> {
+    pub fn ack(&mut self, message_id: &str, agent_id: &str, lease: u64) -> Result<(), HiveError> {
         let message = self
             .messages
             .get_mut(message_id)
